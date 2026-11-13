@@ -1,0 +1,55 @@
+{
+  "name": "hrvcad",
+  "productName": "HRVCAD",
+  "version": "0.1.0",
+  "description": "Proiectare 3D a sistemelor de ventilare cu recuperare de căldură (rezidențial)",
+  "author": "Academia Romstal",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "start": "npm run build && electron .",
+    "web": "node scripts/build.mjs && node scripts/serve.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/build.mjs --tests && node --test \"dist/tests/*.test.mjs\"",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never"
+  },
+  "dependencies": {
+    "@mlightcad/libredwg-web": "0.8.8",
+    "pdfjs-dist": "6.2.108",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.4.0",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "0.170.0",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  },
+  "build": {
+    "appId": "ro.romstal.hrvcad",
+    "productName": "HRVCAD",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "package.json"],
+    "fileAssociations": [
+      { "ext": "hrv", "name": "Proiect HRVCAD", "role": "Editor" }
+    ],
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "category": "public.app-category.productivity",
+      "identity": null
+    }
+  }
+}
