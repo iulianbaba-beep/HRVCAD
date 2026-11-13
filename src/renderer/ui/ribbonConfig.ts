@@ -23,7 +23,8 @@ export const ribbon: RibbonTab[] = [
     id: 'building', title: 'tab.building',
     panels: [
       { title: 'panel.levels', buttons: [L('level.add')] },
-      { title: 'panel.elements', buttons: [L('build.wall'), L('build.slab'), L('build.roof'), S('build.door'), S('build.window'), S('edit.delete')] },
+      { title: 'panel.elements', buttons: [L('build.wall'), L('build.door'), L('build.window'), S('build.slab'), S('build.roof')] },
+      { title: 'panel.modify', buttons: [L('modify.trim'), L('modify.extend'), S('modify.split'), S('modify.offset'), S('modify.mirror'), S('modify.move'), S('modify.copy'), S('modify.rotate'), S('edit.delete')] },
       { title: 'panel.spaces', buttons: [L('build.room')] },
       { title: 'panel.library', buttons: [L('library.open')] }
     ]
@@ -60,6 +61,17 @@ export const ribbon: RibbonTab[] = [
     ]
   }
 ]
+
+/** Contextual tab shown while walls are selected (Revit "Modify | Walls"). */
+export const wallContextTab: RibbonTab = {
+  id: 'ctx-walls', title: 'tab.modifyWalls',
+  panels: [
+    { title: 'panel.transform', buttons: [L('modify.move'), L('modify.copy'), L('modify.rotate'), L('modify.mirror')] },
+    { title: 'panel.geometry', buttons: [L('modify.trim'), L('modify.extend'), S('modify.split'), S('modify.offset'), S('modify.flip')] },
+    { title: 'panel.openings', buttons: [L('build.door'), L('build.window')] },
+    { title: 'panel.selection', buttons: [S('select.all'), S('edit.delete')] }
+  ]
+}
 
 /** Quick Access Toolbar (above the ribbon). */
 export const quickAccess = ['file.new', 'file.open', 'file.save', 'edit.undo', 'edit.redo']

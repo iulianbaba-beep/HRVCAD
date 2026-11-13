@@ -1,6 +1,6 @@
 // Minimal app store: project model with undo/redo + transient UI state.
 import { useSyncExternalStore } from 'react'
-import type { Language, Level, Project, Underlay, Vec2 } from './types'
+import type { Language, Level, Project, Underlay, Vec2, Wall } from './types'
 import { createProject } from './types'
 import { DEFAULT_LIBRARY } from '../library/defaults'
 
@@ -12,7 +12,11 @@ export interface UIState {
   viewMode: ViewMode
   activeLevelId: string
   selectedUnderlayId: string | null
-  selectedWallId: string | null
+  selectedWallIds: string[]
+  selectedOpeningId: string | null
+  /** Defaults for the door/window tools. */
+  doorDefaults: { width: number; height: number; U: number }
+  windowDefaults: { width: number; height: number; sill: number; U: number }
   /** Wall tool defaults. */
   wallTypeId: string
   wallJustification: 'center' | 'left' | 'right'
@@ -48,7 +52,10 @@ let state: AppState = {
     viewMode: '2d',
     activeLevelId: initialProject.levels[0].id,
     selectedUnderlayId: null,
-    selectedWallId: null,
+    selectedWallIds: [],
+    selectedOpeningId: null,
+    doorDefaults: { width: 0.9, height: 2.1, U: 1.5 },
+    windowDefaults: { width: 1.2, height: 1.4, sill: 0.9, U: 1.1 },
     wallTypeId: DEFAULT_LIBRARY.wallTypes[0].id,
     wallJustification: 'left',
     libraryOpen: false,
@@ -103,7 +110,7 @@ export const store = {
     redoStack.length = 0
     state = {
       project: p,
-      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, selectedWallId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
+      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, selectedWallIds: [], selectedOpeningId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
     }
     emit()
   },
@@ -165,6 +172,24 @@ export function updateUnderlay(label: string, id: string, fn: (u: Underlay) => U
 
 export function updateLevel(label: string, levelId: string, fn: (l: Level) => Level) {
   store.update(label, p => ({ ...p, levels: p.levels.map(l => (l.id === levelId ? fn(l) : l)) }))
+}
+
+/** Clear every selection (walls, openings, underlays). */
+export const NO_SELECTION = { selectedWallIds: [] as string[], selectedOpeningId: null, selectedUnderlayId: null }
+
+export function selectedWalls(s: AppState = state): { level: Level; wall: Wall }[] {
+  const out: { level: Level; wall: Wall }[] = []
+  for (const id of s.ui.selectedWallIds) { const f = findWall(id, s); if (f) out.push(f) }
+  return out
+}
+
+export function findOpening(id: string | null, s: AppState = state) {
+  if (!id) return null
+  for (const level of s.project.levels) for (const wall of level.walls) {
+    const opening = wall.openings?.find(o => o.id === id)
+    if (opening) return { level, wall, opening }
+  }
+  return null
 }
 
 export function findWall(id: string | null, s: AppState = state) {

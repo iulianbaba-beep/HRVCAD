@@ -6,11 +6,11 @@ import {
   TbStack2, TbWall, TbLayoutBoard, TbBuildingCottage, TbDoor, TbWindow, TbBorderOuter, TbAirConditioning,
   TbCircleDot, TbRouteSquare, TbArrowsJoin, TbBook, TbFlame, TbWind, TbTopologyStar, TbVolume, TbCoin,
   TbSparkles, TbFileText, TbVector, TbFileSpreadsheet, TbSquare, TbCube, TbZoomScan, TbLayoutGrid, TbMagnet,
-  TbAngle, TbBooks, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
+  TbAngle, TbBooks, TbCopy, TbFlipVertical, TbLayersLinked, TbCut, TbArrowBarToRight, TbSwitchHorizontal, TbSelectAll, TbSeparatorVertical, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
 } from 'react-icons/tb'
 import type { I18nKey } from '../i18n'
 import { t, APP_VERSION } from '../i18n'
-import { activeLevel, emitBus, findUnderlay, findWall, store, updateLevel } from './store'
+import { activeLevel, emitBus, findOpening, findUnderlay, store, updateLevel } from './store'
 import { createProject, newId, type Level, type Underlay } from './types'
 import { DEFAULT_LIBRARY } from '../library/defaults'
 import { openFile, saveFile } from './platform'
@@ -19,6 +19,9 @@ import { formatLength } from './geom'
 import { tools } from '../tools/tool'
 import { calibrateTool, measureTool, moveTool, rotateTool } from '../tools/underlayTools'
 import { wallTool } from '../tools/wallTool'
+import {
+  extendTool, flipSelected, mirrorWallsTool, moveWallsTool, offsetTool, openingTool, rotateWallsTool, selectAllWalls, splitTool, trimTool
+} from '../tools/modifyTools'
 
 export interface Command {
   id: string
@@ -56,7 +59,7 @@ function addUnderlay(u: Underlay) {
     ...p,
     levels: p.levels.map(l => (l.id === levelId ? { ...l, underlays: [...l.underlays, u] } : l))
   }))
-  store.setUI({ selectedUnderlayId: u.id, selectedWallId: null })
+  store.setUI({ selectedUnderlayId: u.id, selectedWallIds: [], selectedOpeningId: null })
   emitBus('zoomExtents')
 }
 
@@ -153,9 +156,9 @@ const commands: Command[] = [
     } },
   { id: 'underlay.calibrate', icon: TbScale, aliases: ['CAL', 'CALIBRARE', 'SCALE', 'SCALA'],
     run: () => { const tl = calibrateTool(); if (tl) tools.start(tl) } },
-  { id: 'underlay.move', icon: TbArrowsMove, aliases: ['M', 'MOVE', 'MUTA'],
+  { id: 'underlay.move', icon: TbArrowsMove, aliases: ['MPLAN', 'MUTAPLAN'],
     run: () => { const tl = moveTool(); if (tl) tools.start(tl) } },
-  { id: 'underlay.rotate', icon: TbRotate, aliases: ['RO', 'ROTATE', 'ROTESTE'],
+  { id: 'underlay.rotate', icon: TbRotate, aliases: ['ROPLAN'],
     run: () => { const tl = rotateTool(); if (tl) tools.start(tl) } },
   { id: 'underlay.lock', icon: TbLock, aliases: ['LOCK', 'BLOCHEAZA'],
     checked: () => !!findUnderlay(store.get().ui.selectedUnderlayId)?.underlay.locked,
@@ -171,14 +174,40 @@ const commands: Command[] = [
   { id: 'edit.delete', icon: TbTrash, aliases: ['ERASE', 'E', 'STERGE', 'DEL'], shortcut: 'Delete',
     run: () => {
       const s = store.get()
-      const w = findWall(s.ui.selectedWallId)
-      if (w) {
-        updateLevel(label('edit.delete'), w.level.id, l => ({ ...l, walls: l.walls.filter(x => x.id !== w.wall.id) }))
-        store.setUI({ selectedWallId: null })
+      const op = findOpening(s.ui.selectedOpeningId)
+      if (op) {
+        updateLevel(label('edit.delete'), op.level.id, l => ({
+          ...l, walls: l.walls.map(w => (w.id === op.wall.id ? { ...w, openings: (w.openings ?? []).filter(o => o.id !== op.opening.id) } : w))
+        }))
+        store.setUI({ selectedOpeningId: null })
+        return
+      }
+      const ids = new Set(s.ui.selectedWallIds)
+      if (ids.size) {
+        store.update(label('edit.delete'), p => ({ ...p, levels: p.levels.map(l => ({ ...l, walls: l.walls.filter(w => !ids.has(w.id)) })) }))
+        store.setUI({ selectedWallIds: [] })
         return
       }
       if (s.ui.selectedUnderlayId) return runCommand('underlay.delete')
     } },
+  { id: 'select.all', icon: TbSelectAll, aliases: ['ALL', 'SELECTALL', 'TOT'], shortcut: 'Ctrl+A', run: selectAllWalls },
+  { id: 'modify.move', icon: TbArrowsMove, aliases: ['M', 'MOVE', 'MUTA'],
+    run: () => {
+      if (store.get().ui.selectedWallIds.length) { const tl = moveWallsTool(false); if (tl) tools.start(tl) }
+      else { const tl = moveTool(); if (tl) tools.start(tl) }
+    } },
+  { id: 'modify.copy', icon: TbCopy, aliases: ['CO', 'CP', 'COPY', 'COPIAZA'], run: () => { const tl = moveWallsTool(true); if (tl) tools.start(tl) } },
+  { id: 'modify.rotate', icon: TbRotate, aliases: ['RO', 'ROTATE', 'ROTESTE'],
+    run: () => {
+      if (store.get().ui.selectedWallIds.length) { const tl = rotateWallsTool(); if (tl) tools.start(tl) }
+      else { const tl = rotateTool(); if (tl) tools.start(tl) }
+    } },
+  { id: 'modify.mirror', icon: TbFlipVertical, aliases: ['MI', 'MIRROR', 'OGLINDESTE'], run: () => { const tl = mirrorWallsTool(); if (tl) tools.start(tl) } },
+  { id: 'modify.offset', icon: TbLayersLinked, aliases: ['O', 'OFFSET', 'DECALAJ'], run: () => tools.start(offsetTool()) },
+  { id: 'modify.split', icon: TbSeparatorVertical, aliases: ['BR', 'SPLIT', 'DIVIZEAZA'], run: () => tools.start(splitTool()) },
+  { id: 'modify.trim', icon: TbCut, aliases: ['TR', 'TRIM', 'TAIE'], run: () => tools.start(trimTool()) },
+  { id: 'modify.extend', icon: TbArrowBarToRight, aliases: ['EX', 'EXTEND', 'PRELUNGESTE'], run: () => tools.start(extendTool()) },
+  { id: 'modify.flip', icon: TbSwitchHorizontal, aliases: ['FLIP', 'INVERSEAZA'], run: flipSelected },
   { id: 'underlay.delete', icon: TbTrash, aliases: ['DELPLAN'],
     run: () => {
       const f = findUnderlay(store.get().ui.selectedUnderlayId)
@@ -209,8 +238,8 @@ const commands: Command[] = [
     run: () => store.setUI({ libraryOpen: true }) },
   { id: 'build.slab', icon: TbLayoutBoard, aliases: ['SLAB', 'PLANSEU'], stage: 2 },
   { id: 'build.roof', icon: TbBuildingCottage, aliases: ['ROOF', 'ACOPERIS'], stage: 2 },
-  { id: 'build.door', icon: TbDoor, aliases: ['DOOR', 'USA'], stage: 2 },
-  { id: 'build.window', icon: TbWindow, aliases: ['WINDOW', 'FEREASTRA'], stage: 2 },
+  { id: 'build.door', icon: TbDoor, aliases: ['DOOR', 'USA', 'DR'], run: () => tools.start(openingTool('door')) },
+  { id: 'build.window', icon: TbWindow, aliases: ['WINDOW', 'FEREASTRA', 'WIN'], run: () => tools.start(openingTool('window')) },
   { id: 'build.room', icon: TbBorderOuter, aliases: ['ROOM', 'CAMERA'], stage: 2 },
 
   // HVAC

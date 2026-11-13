@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TbChevronDown, TbTerminal2 } from 'react-icons/tb'
-import { ribbon, quickAccess, type RibbonButton } from './ribbonConfig'
+import { ribbon, quickAccess, wallContextTab, type RibbonButton } from './ribbonConfig'
 import { commandDesc, commandLabel, getCommand, runCommand } from '../core/commands'
 import { store, useStore } from '../core/store'
 import { useT, APP_VERSION } from '../i18n'
@@ -51,7 +51,15 @@ export function Ribbon() {
   const dirty = useStore(s => s.ui.dirty)
   const busy = useStore(s => s.ui.busy)
   useStore(s => s.project) // undo/redo enabled state
-  const current = ribbon.find(r => r.id === tab)!
+  const hasWallSel = useStore(s => s.ui.selectedWallIds.length > 0)
+  const prevTab = useRef('plan')
+  // Like Revit: selecting walls opens the contextual "Modify" tab; clearing the selection returns.
+  useEffect(() => {
+    if (hasWallSel) { if (tab !== wallContextTab.id) prevTab.current = tab; setTab(wallContextTab.id) }
+    else if (tab === wallContextTab.id) setTab(prevTab.current)
+  }, [hasWallSel])
+  const tabs = hasWallSel ? [...ribbon, wallContextTab] : ribbon
+  const current = tabs.find(r => r.id === tab) ?? ribbon[0]
 
   return (
     <header className="ribbon-host">
@@ -77,8 +85,8 @@ export function Ribbon() {
         <button className={`tab tab-file${fileMenuOpen ? ' on' : ''}`} onClick={() => store.setUI({ fileMenuOpen: !fileMenuOpen })}>
           {t('tab.file')}
         </button>
-        {ribbon.map(r => (
-          <button key={r.id} role="tab" aria-selected={tab === r.id} className={`tab${tab === r.id ? ' on' : ''}`}
+        {tabs.map(r => (
+          <button key={r.id} role="tab" aria-selected={tab === r.id} className={`tab${tab === r.id ? ' on' : ''}${r.id.startsWith('ctx') ? ' tab-ctx' : ''}`}
             onClick={() => { setTab(r.id); setCollapsed(false) }} onDoubleClick={() => setCollapsed(c => !c)}>
             {t(r.title)}
           </button>

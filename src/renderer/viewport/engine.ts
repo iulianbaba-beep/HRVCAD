@@ -5,7 +5,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { Level, Library, RasterUnderlay, Underlay, Vec2, VectorUnderlay } from '../core/types'
 import { activeLevel, bus, store, type AppState } from '../core/store'
 import { applyTransform } from '../core/geom'
-import { pointInPolygon, wallPolygons } from '../core/walls'
+import { clipBand, faceOffsets, norm as vnorm, pointInPolygon, sub as vsub, wallPieces, wallPolygons, wallThickness } from '../core/walls'
+import { gripTool } from '../tools/modifyTools'
 import { tools, type OverlayShape } from '../tools/tool'
 import { computeSnap, type SnapResult, type SnapSource } from './snap'
 
@@ -14,8 +15,9 @@ const BG = 0xfbfcfd
 
 interface UnderlayEntry { ref: Underlay; elevation: number; obj: THREE.Object3D; snap: SnapSource }
 interface WallEntry {
-  walls: Level['walls']; lib: Library; elevation: number; height: number; selected: string | null
-  obj: THREE.Group; polys: Map<string, Vec2[]>; snap: SnapSource
+  walls: Level['walls']; lib: Library; elevation: number; height: number; selected: string
+  obj: THREE.Group; g3: THREE.Group; g2: THREE.Group; polys: Map<string, Vec2[]>; snap: SnapSource
+  openings: Map<string, Vec2[]>
 }
 
 export class Viewport {
@@ -42,6 +44,7 @@ export class Viewport {
   private lastMiddleDown = 0
   private spaceDown = false
   private hover: SnapResult | null = null
+  private box: { x0: number; y0: number; x1: number; y1: number } | null = null
   private screen: { x: number; y: number } | null = null
   private unsub: () => void
   private ro: ResizeObserver
@@ -108,7 +111,7 @@ export class Viewport {
     const modeChanged = !prev || prev.ui.viewMode !== s.ui.viewMode
     if (prev && prev.project === s.project && !modeChanged && prev.ui.activeLevelId === s.ui.activeLevelId &&
         prev.ui.grid === s.ui.grid && prev.ui.selectedUnderlayId === s.ui.selectedUnderlayId &&
-        prev.ui.selectedWallId === s.ui.selectedWallId &&
+        prev.ui.selectedWallIds === s.ui.selectedWallIds && prev.ui.selectedOpeningId === s.ui.selectedOpeningId &&
         prev.ui.activeTool === s.ui.activeTool) return
 
     this.grid.visible = s.ui.grid
@@ -134,19 +137,17 @@ export class Viewport {
     for (const level of s.project.levels) {
       seenLevels.add(level.id)
       const e = this.wallEntries.get(level.id)
-      const sel = s.ui.selectedWallId
+      const sel = s.ui.selectedWallIds.join(',') + '|' + (s.ui.selectedOpeningId ?? '')
       if (!e || e.walls !== level.walls || e.lib !== s.project.library || e.elevation !== level.elevation ||
           e.height !== level.height || e.selected !== sel) {
         if (e) this.disposeObj(e.obj)
-        this.wallEntries.set(level.id, this.buildWalls(level, s.project.library, sel))
+        this.wallEntries.set(level.id, this.buildWalls(level, s.project.library, s.ui.selectedWallIds, s.ui.selectedOpeningId, sel))
       }
       const we = this.wallEntries.get(level.id)!
       const onActive = level.id === active.id
       we.obj.visible = this.is3D() || onActive
-      we.obj.traverse(o => {
-        const m = (o as THREE.Mesh).material as THREE.MeshLambertMaterial | undefined
-        if (m && (o as THREE.Mesh).isMesh) { m.opacity = this.is3D() ? 1 : 0.62; m.transparent = !this.is3D() }
-      })
+      we.g3.visible = this.is3D()
+      we.g2.visible = !this.is3D()
     }
     for (const [id, e] of this.wallEntries) if (!seenLevels.has(id)) { this.disposeObj(e.obj); this.wallEntries.delete(id) }
 
@@ -213,28 +214,96 @@ export class Viewport {
     }
   }
 
-  private buildWalls(level: Level, lib: Library, selected: string | null): WallEntry {
-    const g = new THREE.Group()
+  private buildWalls(level: Level, lib: Library, selIds: string[], selOpening: string | null, selKey: string): WallEntry {
+    const CUT_Z = 1.2 // plan cut height, m
+    const g = new THREE.Group(), g3 = new THREE.Group(), g2 = new THREE.Group()
+    g.add(g3, g2)
     const polys = wallPolygons(level.walls, lib)
+    const openings = new Map<string, Vec2[]>()
     const pts: number[] = [], segs: number[] = []
-    const typeColor = (typeId: string) =>
-      lib.wallTypes.find(t => t.id === typeId)?.category === 'interior' ? 0xb8c2cc : 0x8796a5
+    const sel = new Set(selIds)
+    const isInterior = (typeId: string) => lib.wallTypes.find(t => t.id === typeId)?.category === 'interior'
+    const sym: number[] = [], symSel: number[] = []
+    const glass: THREE.BufferGeometry[] = []
+    const z0 = level.elevation
     for (const w of level.walls) {
       const poly = polys.get(w.id)
       if (!poly) continue
       const h = w.height ?? level.height
-      const shape = new THREE.Shape(poly.map(p => new THREE.Vector2(p.x, p.y)))
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false })
-      const isSel = w.id === selected
-      const mat = new THREE.MeshLambertMaterial({ color: isSel ? 0x209ed9 : typeColor(w.typeId), transparent: true })
-      const mesh = new THREE.Mesh(geo, mat)
-      mesh.position.z = level.elevation
-      mesh.userData.wallId = w.id
-      g.add(mesh)
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30),
-        new THREE.LineBasicMaterial({ color: isSel ? 0x0e6e9c : 0x2d3a46, transparent: true, opacity: 0.85 }))
-      edges.position.z = level.elevation
-      g.add(edges)
+      const isSel = sel.has(w.id)
+      const color = isSel ? 0x209ed9 : isInterior(w.typeId) ? 0xb8c2cc : 0x8796a5
+      const mat3 = new THREE.MeshLambertMaterial({ color })
+      const edgeMat = new THREE.LineBasicMaterial({ color: isSel ? 0x0e6e9c : 0x2d3a46, transparent: true, opacity: 0.85 })
+      const mat2 = new THREE.MeshBasicMaterial({ color: isSel ? 0x209ed9 : isInterior(w.typeId) ? 0x9aa6b2 : 0x5f6e7d, transparent: true, opacity: 0.78, depthWrite: false })
+      for (const pc of wallPieces(w, poly, h)) {
+        const shape = new THREE.Shape(pc.poly.map(p => new THREE.Vector2(p.x, p.y)))
+        const geo = new THREE.ExtrudeGeometry(shape, { depth: pc.z1 - pc.z0, bevelEnabled: false })
+        const mesh = new THREE.Mesh(geo, mat3)
+        mesh.position.z = z0 + pc.z0
+        g3.add(mesh)
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), edgeMat)
+        edges.position.z = z0 + pc.z0
+        g3.add(edges)
+        if (pc.z0 <= CUT_Z && pc.z1 > CUT_Z) {
+          const flat = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat2)
+          flat.position.z = z0 + 0.05
+          g2.add(flat)
+          const outline: number[] = []
+          for (let i = 0; i < pc.poly.length; i++) {
+            const a = pc.poly[i], b = pc.poly[(i + 1) % pc.poly.length]
+            outline.push(a.x, a.y, 0, b.x, b.y, 0)
+          }
+          const og = new THREE.BufferGeometry()
+          og.setAttribute('position', new THREE.Float32BufferAttribute(outline, 3))
+          const ol = new THREE.LineSegments(og, edgeMat)
+          ol.position.z = z0 + 0.06
+          g2.add(ol)
+        }
+      }
+      // Openings: plan symbols, glass panes, hit areas
+      const d = vnorm(vsub(w.b, w.a)), n = { x: -d.y, y: d.x }
+      const { L: fL, R: fR } = faceOffsets(w.justification, wallThickness(w, lib))
+      const P = (s: number, o: number) => ({ x: w.a.x + d.x * s + n.x * o, y: w.a.y + d.y * s + n.y * o })
+      for (const o of w.openings ?? []) {
+        const s0 = o.offset - o.width / 2, s1 = o.offset + o.width / 2
+        const band = clipBand(poly, w.a, d, s0, s1)
+        if (band.length) openings.set(o.id, band)
+        const out = o.id === selOpening || isSel ? symSel : sym
+        const line = (a: Vec2, b: Vec2) => out.push(a.x, a.y, 0, b.x, b.y, 0)
+        line(P(s0, fL), P(s0, fR)); line(P(s1, fL), P(s1, fR))
+        if (o.kind === 'window') {
+          line(P(s0, fL), P(s1, fL)); line(P(s0, fR), P(s1, fR))
+          const m = (fL + fR) / 2
+          line(P(s0, m + 0.02), P(s1, m + 0.02)); line(P(s0, m - 0.02), P(s1, m - 0.02))
+          const pg = new THREE.PlaneGeometry(o.width, o.height)
+          pg.rotateX(Math.PI / 2)
+          pg.rotateZ(Math.atan2(d.y, d.x))
+          const c = P(o.offset, m)
+          pg.translate(c.x, c.y, z0 + o.sill + o.height / 2)
+          glass.push(pg)
+        } else {
+          const face = o.swing === 'left' ? fL : fR
+          const sign = o.swing === 'left' ? 1 : -1
+          const hs = o.hinge === 'start' ? s0 : s1, fs = o.hinge === 'start' ? s1 : s0
+          const hinge = P(hs, face)
+          const tip = { x: hinge.x + n.x * sign * o.width, y: hinge.y + n.y * sign * o.width }
+          line(hinge, tip)
+          // quarter arc from the leaf tip back to the closed position
+          const a0 = Math.atan2(tip.y - hinge.y, tip.x - hinge.x)
+          const closed = P(fs, face)
+          let a1 = Math.atan2(closed.y - hinge.y, closed.x - hinge.x)
+          let da = a1 - a0
+          while (da > Math.PI) da -= 2 * Math.PI
+          while (da < -Math.PI) da += 2 * Math.PI
+          const N = 16
+          for (let i = 0; i < N; i++) {
+            const t0 = a0 + (da * i) / N, t1 = a0 + (da * (i + 1)) / N
+            line({ x: hinge.x + Math.cos(t0) * o.width, y: hinge.y + Math.sin(t0) * o.width },
+                 { x: hinge.x + Math.cos(t1) * o.width, y: hinge.y + Math.sin(t1) * o.width })
+          }
+        }
+        pts.push(P(o.offset, fL).x, P(o.offset, fL).y, P(o.offset, fR).x, P(o.offset, fR).y)
+      }
       for (let i = 0; i < 4; i++) {
         const a = poly[i], b = poly[(i + 1) % 4]
         pts.push(a.x, a.y)
@@ -242,9 +311,23 @@ export class Viewport {
       }
       pts.push(w.a.x, w.a.y, w.b.x, w.b.y, (w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2)
     }
+    const addLines = (arr: number[], color: number) => {
+      if (!arr.length) return
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3))
+      const l = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color }))
+      l.position.z = z0 + 0.08
+      g2.add(l)
+    }
+    addLines(sym, 0x1d2731)
+    addLines(symSel, 0x0e6e9c)
+    if (glass.length) {
+      const gm = new THREE.MeshLambertMaterial({ color: 0x9fd3ef, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })
+      for (const pg of glass) g3.add(new THREE.Mesh(pg, gm))
+    }
     this.wallRoot.add(g)
     return {
-      walls: level.walls, lib, elevation: level.elevation, height: level.height, selected, obj: g, polys,
+      walls: level.walls, lib, elevation: level.elevation, height: level.height, selected: selKey, obj: g, g3, g2, polys, openings,
       snap: { points: new Float64Array(pts), segs: new Float64Array(segs) }
     }
   }
@@ -433,6 +516,54 @@ export class Viewport {
     return res
   }
 
+  private hitOpening(p: Vec2): string | null {
+    const we = this.wallEntries.get(activeLevel().id)
+    if (!we) return null
+    for (const [id, poly] of we.openings) if (pointInPolygon(p, poly)) return id
+    return null
+  }
+
+  /** Wall endpoint grip under the cursor (screen distance), for selected walls. */
+  private hitGrip(px: number, py: number): { wallId: string; end: 'a' | 'b' } | null {
+    const s = store.get()
+    for (const id of s.ui.selectedWallIds) {
+      const w = activeLevel(s).walls.find(x => x.id === id)
+      if (!w) continue
+      for (const end of ['a', 'b'] as const) {
+        const q = this.worldToScreen(w[end])
+        if (Math.hypot(q.x - px, q.y - py) < 8) return { wallId: id, end }
+      }
+    }
+    return null
+  }
+
+  /** Walls inside (window) or touching (crossing) a screen rectangle. */
+  private wallsInBox(b: { x0: number; y0: number; x1: number; y1: number }, crossing: boolean): string[] {
+    const we = this.wallEntries.get(activeLevel().id)
+    if (!we) return []
+    const xmin = Math.min(b.x0, b.x1), xmax = Math.max(b.x0, b.x1), ymin = Math.min(b.y0, b.y1), ymax = Math.max(b.y0, b.y1)
+    const inside = (q: { x: number; y: number }) => q.x >= xmin && q.x <= xmax && q.y >= ymin && q.y <= ymax
+    const segHits = (p: { x: number; y: number }, q: { x: number; y: number }) => {
+      // Liang–Barsky clip of segment against the rectangle
+      let t0 = 0, t1 = 1
+      const dx = q.x - p.x, dy = q.y - p.y
+      for (const [pp, qq] of [[-dx, p.x - xmin], [dx, xmax - p.x], [-dy, p.y - ymin], [dy, ymax - p.y]]) {
+        if (pp === 0) { if (qq < 0) return false; continue }
+        const r = qq / pp
+        if (pp < 0) { if (r > t1) return false; if (r > t0) t0 = r } else { if (r < t0) return false; if (r < t1) t1 = r }
+      }
+      return true
+    }
+    const out: string[] = []
+    for (const [id, poly] of we.polys) {
+      const sp = poly.map(p => this.worldToScreen(p))
+      const all = sp.every(inside)
+      const any = crossing && (sp.some(inside) || sp.some((p, i) => segHits(p, sp[(i + 1) % sp.length])))
+      if (all || any) out.push(id)
+    }
+    return out
+  }
+
   /** Topmost wall under a world point on the active level. */
   private hitWall(p: Vec2): string | null {
     const we = this.wallEntries.get(activeLevel().id)
@@ -469,10 +600,17 @@ export class Viewport {
       if (now - this.lastMiddleDown < 350) { this.zoomExtents(); e.preventDefault(); return }
       this.lastMiddleDown = now
     }
-    if (!this.is3D() && (e.button === 1 || (e.button === 0 && (this.spaceDown || !tools.active)))) {
+    if (this.is3D()) return
+    if (e.button === 1 || (e.button === 0 && this.spaceDown)) {
       this.panning = p
       this.renderer.domElement.setPointerCapture(e.pointerId)
       e.preventDefault()
+      return
+    }
+    // Left-drag on empty space (no tool) starts a selection window, like AutoCAD.
+    if (e.button === 0 && !tools.active && !this.hitGrip(p.x, p.y)) {
+      this.box = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }
+      this.renderer.domElement.setPointerCapture(e.pointerId)
     }
   }
 
@@ -486,6 +624,7 @@ export class Viewport {
       this.updateOrtho()
       this.requestRender()
     }
+    if (this.box) { this.box.x1 = p.x; this.box.y1 = p.y }
     const w = this.screenToWorld(p.x, p.y)
     if (w) {
       this.hover = this.findSnap(p.x, p.y, w)
@@ -500,6 +639,16 @@ export class Viewport {
     const click = this.downAt && Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) < 4
     this.panning = null
     this.downAt = null
+    const box = this.box
+    this.box = null
+    if (box && !click) {
+      const crossing = box.x1 < box.x0 // right-to-left = crossing window
+      const ids = this.wallsInBox(box, crossing)
+      const cur = e.shiftKey ? store.get().ui.selectedWallIds : []
+      store.setUI({ selectedWallIds: [...new Set([...cur, ...ids])], selectedOpeningId: null, selectedUnderlayId: null })
+      this.drawOverlay()
+      return
+    }
     if (!click) return
     if (e.button === 2) { if (tools.active) tools.cancel(); return }
     if (e.button !== 0 || this.spaceDown) return
@@ -507,9 +656,19 @@ export class Viewport {
     if (!w) return
     const target = this.findSnap(p.x, p.y, w).world
     if (tools.active) { tools.pick(target); return }
+    const grip = this.hitGrip(p.x, p.y)
+    if (grip) { const tl = gripTool(grip.wallId, grip.end); if (tl) tools.start(tl); return }
+    const op = this.hitOpening(w)
+    if (op) { store.setUI({ selectedOpeningId: op, selectedWallIds: [], selectedUnderlayId: null }); return }
     const wall = this.hitWall(w)
-    if (wall) { store.setUI({ selectedWallId: wall, selectedUnderlayId: null }); return }
-    store.setUI({ selectedWallId: null, selectedUnderlayId: this.hitUnderlay(w) })
+    if (wall) {
+      const cur = store.get().ui.selectedWallIds
+      const ids = e.shiftKey ? (cur.includes(wall) ? cur.filter(x => x !== wall) : [...cur, wall]) : [wall]
+      store.setUI({ selectedWallIds: ids, selectedOpeningId: null, selectedUnderlayId: null })
+      return
+    }
+    if (e.shiftKey) return
+    store.setUI({ selectedWallIds: [], selectedOpeningId: null, selectedUnderlayId: this.hitUnderlay(w) })
   }
 
   private onWheel = (e: WheelEvent) => {
@@ -563,6 +722,20 @@ export class Viewport {
         const pts = [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => P(applyTransform(u.transform, { x, y })))
         parts.push(`<polygon class="ov-sel" points="${pts.map(p => `${p.x},${p.y}`).join(' ')}"/>`)
       }
+    }
+
+    // Grips on selected walls (active level)
+    if (!this.is3D() && !tools.active) {
+      for (const id of s.ui.selectedWallIds) {
+        const w = activeLevel(s).walls.find(x => x.id === id)
+        if (!w) continue
+        for (const q of [P(w.a), P(w.b)]) parts.push(`<rect class="ov-grip" x="${q.x - 5}" y="${q.y - 5}" width="10" height="10"/>`)
+      }
+    }
+    if (this.box) {
+      const b = this.box
+      const cls = b.x1 < b.x0 ? 'ov-box crossing' : 'ov-box'
+      parts.push(`<rect class="${cls}" x="${Math.min(b.x0, b.x1)}" y="${Math.min(b.y0, b.y1)}" width="${Math.abs(b.x1 - b.x0)}" height="${Math.abs(b.y1 - b.y0)}"/>`)
     }
 
     // Tool rubber-band shapes

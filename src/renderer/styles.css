@@ -229,3 +229,8 @@ input, select { font: inherit; color: inherit; }
 
 .lib-table td.acts .icon-btn { display: inline-grid; }
 .prop .seg.small button { padding: 3px 4px; font-size: 11.5px; }
+.ov-grip { fill: #209ed9; stroke: #fff; stroke-width: 1.5; }
+.ov-box { fill: rgba(32,120,217,.10); stroke: #2078d9; stroke-width: 1; }
+.ov-box.crossing { fill: rgba(22,163,74,.10); stroke: #16a34a; stroke-dasharray: 5 3; }
+.tab.tab-ctx { color: #0b7a3e; background: #e8f6ee; border-bottom-color: #16a34a; }
+.tab.tab-ctx.on { color: #075c2e; background: #d6f0e1; }

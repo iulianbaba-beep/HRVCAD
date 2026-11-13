@@ -98,3 +98,52 @@ export function closestOnSegment(p: Vec2, a: Vec2, b: Vec2): { q: Vec2; d: numbe
   const q = { x: a.x + ab.x * t, y: a.y + ab.y * t }
   return { q, d: Math.hypot(p.x - q.x, p.y - q.y), t }
 }
+
+/** Clip a convex polygon to the band s0 ≤ dot(p − origin, d) ≤ s1. */
+export function clipBand(poly: Vec2[], origin: Vec2, d: Vec2, s0: number, s1: number): Vec2[] {
+  const half = (pts: Vec2[], keep: (s: number) => boolean, edge: number): Vec2[] => {
+    const out: Vec2[] = []
+    const sOf = (p: Vec2) => (p.x - origin.x) * d.x + (p.y - origin.y) * d.y
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length]
+      const sp = sOf(p), sq = sOf(q)
+      const ip = keep(sp), iq = keep(sq)
+      if (ip) out.push(p)
+      if (ip !== iq) {
+        const t = (edge - sp) / (sq - sp)
+        out.push({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t })
+      }
+    }
+    return out
+  }
+  let r = poly
+  if (Number.isFinite(s0)) r = half(r, s => s >= s0, s0)
+  if (r.length && Number.isFinite(s1)) r = half(r, s => s <= s1, s1)
+  return r.length >= 3 ? r : []
+}
+
+export interface WallPiece { poly: Vec2[]; z0: number; z1: number }
+
+/** Solid pieces of a wall (footprint + height range) after cutting door/window openings. */
+export function wallPieces(w: Wall, poly: Vec2[], height: number): WallPiece[] {
+  const ops = [...(w.openings ?? [])].sort((x, y) => x.offset - y.offset)
+  if (!ops.length) return [{ poly, z0: 0, z1: height }]
+  const d = norm(sub(w.b, w.a))
+  const out: WallPiece[] = []
+  let s = -Infinity
+  for (const o of ops) {
+    const o0 = o.offset - o.width / 2, o1 = o.offset + o.width / 2
+    const full = clipBand(poly, w.a, d, s, o0)
+    if (full.length) out.push({ poly: full, z0: 0, z1: height })
+    const mid = clipBand(poly, w.a, d, o0, o1)
+    if (mid.length) {
+      if (o.sill > 0) out.push({ poly: mid, z0: 0, z1: Math.min(o.sill, height) })
+      const head = o.sill + o.height
+      if (head < height) out.push({ poly: mid, z0: head, z1: height })
+    }
+    s = o1
+  }
+  const tail = clipBand(poly, w.a, d, s, Infinity)
+  if (tail.length) out.push({ poly: tail, z0: 0, z1: height })
+  return out
+}

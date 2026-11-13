@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { TbEye, TbEyeOff, TbLock, TbChevronDown, TbStack2, TbFileImport, TbPhoto, TbFileTypePdf } from 'react-icons/tb'
-import { activeLevel, findUnderlay, findWall, store, updateLevel, updateUnderlay, useStore } from '../core/store'
-import type { Underlay, Wall, WallJustification } from '../core/types'
+import { activeLevel, findOpening, findUnderlay, findWall, store, updateLevel, updateUnderlay, useStore } from '../core/store'
+import type { Opening, Underlay, Wall, WallJustification } from '../core/types'
 import { dist, formatLength } from '../core/geom'
 import { wallTypeThickness, wallTypeU } from '../core/thermal'
 import { runCommand } from '../core/commands'
@@ -48,7 +48,7 @@ export function ProjectPanel() {
           const open = openLayers[u.id] ?? true
           return (
             <li key={u.id}>
-              <div className={`tree-row${u.id === selected ? ' on' : ''}`} onClick={() => store.setUI({ selectedUnderlayId: u.id, selectedWallId: null })}>
+              <div className={`tree-row${u.id === selected ? ' on' : ''}`} onClick={() => store.setUI({ selectedUnderlayId: u.id, selectedWallIds: [], selectedOpeningId: null })}>
                 {u.kind === 'vector' && (
                   <button className="icon-btn" onClick={e => { e.stopPropagation(); setOpenLayers(o => ({ ...o, [u.id]: !open })) }}>
                     <TbChevronDown style={{ transform: open ? '' : 'rotate(-90deg)' }} />
@@ -103,11 +103,15 @@ export function PropertiesPanel() {
   const updLevel = (patch: Partial<typeof level>) =>
     store.update(t('props.level'), p => ({ ...p, levels: p.levels.map(l => (l.id === level.id ? { ...l, ...patch } : l)) }))
 
-  const selWallId = useStore(s => s.ui.selectedWallId)
+  const selWallIds = useStore(s => s.ui.selectedWallIds)
+  const selOpeningId = useStore(s => s.ui.selectedOpeningId)
+  const doorDef = useStore(s => s.ui.doorDefaults)
+  const winDef = useStore(s => s.ui.windowDefaults)
+  const fo = findOpening(selOpeningId)
   const tool = useStore(s => s.ui.activeTool)
   const wallTypeId = useStore(s => s.ui.wallTypeId)
   const just = useStore(s => s.ui.wallJustification)
-  const fw = findWall(selWallId)
+  const fw = selWallIds.length === 1 ? findWall(selWallIds[0]) : null
   const lib = project.library
 
   const typeSelect = (value: string, onChange: (id: string) => void) => (
@@ -140,7 +144,70 @@ export function PropertiesPanel() {
   return (
     <aside className="side side-right">
       <div className="side-title">{t('props.title')}</div>
-      {fw ? (() => {
+      {fo ? (() => {
+        const { wall: w, opening: o, level: lv } = fo
+        const updO = (label: string, patch: Partial<Opening>) =>
+          updateLevel(label, lv.id, l => ({
+            ...l, walls: l.walls.map(x => (x.id === w.id ? { ...x, openings: (x.openings ?? []).map(y => (y.id === o.id ? { ...y, ...patch } : y)) } : x))
+          }))
+        const L = dist(w.a, w.b)
+        return (
+          <div className="props">
+            <div className="side-section">{t(o.kind === 'door' ? 'props.door' : 'props.window')}</div>
+            <Row label={t('props.widthM')}><NumberField value={o.width} onCommit={v => v > 0.2 && v < L && updO(t('props.widthM'), { width: v })} /></Row>
+            <Row label={t('props.heightM')}><NumberField value={o.height} onCommit={v => v > 0.2 && updO(t('props.heightM'), { height: v })} /></Row>
+            {o.kind === 'window' && <Row label={t('props.sillM')}><NumberField value={o.sill} onCommit={v => v >= 0 && updO(t('props.sillM'), { sill: v })} /></Row>}
+            <Row label={t('props.fromStartM')}><NumberField value={o.offset - o.width / 2}
+              onCommit={v => v >= 0 && v + o.width <= L && updO(t('props.fromStartM'), { offset: v + o.width / 2 })} /></Row>
+            <Row label={t('props.Uopening')}><NumberField value={o.U} digits={2} onCommit={v => v > 0 && updO(t('props.Uopening'), { U: v })} /></Row>
+            {o.kind === 'door' && <>
+              <Row label={t('props.hinge')}>
+                <div className="seg small">
+                  <button className={o.hinge === 'start' ? 'on' : ''} onClick={() => updO(t('props.hinge'), { hinge: 'start' })}>A</button>
+                  <button className={o.hinge === 'end' ? 'on' : ''} onClick={() => updO(t('props.hinge'), { hinge: 'end' })}>B</button>
+                </div>
+              </Row>
+              <Row label={t('props.swing')}>
+                <div className="seg small">
+                  <button className={o.swing === 'left' ? 'on' : ''} onClick={() => updO(t('props.swing'), { swing: 'left' })}>{t('wall.just.left')}</button>
+                  <button className={o.swing === 'right' ? 'on' : ''} onClick={() => updO(t('props.swing'), { swing: 'right' })}>{t('wall.just.right')}</button>
+                </div>
+              </Row>
+            </>}
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : selWallIds.length > 1 ? (() => {
+        const ids = new Set(selWallIds)
+        const ws = project.levels.flatMap(l => l.walls.filter(w => ids.has(w.id)))
+        const types = new Set(ws.map(w => w.typeId))
+        const total = ws.reduce((a, w) => a + dist(w.a, w.b), 0)
+        return (
+          <div className="props">
+            <div className="side-section">{t('props.multiWalls', { n: ws.length })}</div>
+            <Row label={t('props.wallType')}>{typeSelect(types.size === 1 ? [...types][0] : '',
+              id => store.update(t('props.wallType'), p => ({ ...p, levels: p.levels.map(l => ({ ...l, walls: l.walls.map(w => (ids.has(w.id) ? { ...w, typeId: id } : w)) })) })))}</Row>
+            <Row label={t('props.totalLength')}><span className="ro">{formatLength(total, unit)}</span></Row>
+            <p className="muted pad small">{t('props.multiHelp')}</p>
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : (tool === 'build.door' || tool === 'build.window') ? (
+        <div className="props">
+          <div className="side-section">{t(tool === 'build.door' ? 'props.doorDefaults' : 'props.windowDefaults')}</div>
+          {tool === 'build.door' ? <>
+            <Row label={t('props.widthM')}><NumberField value={doorDef.width} onCommit={v => v > 0.2 && store.setUI({ doorDefaults: { ...doorDef, width: v } })} /></Row>
+            <Row label={t('props.heightM')}><NumberField value={doorDef.height} onCommit={v => v > 0.2 && store.setUI({ doorDefaults: { ...doorDef, height: v } })} /></Row>
+            <Row label={t('props.Uopening')}><NumberField value={doorDef.U} digits={2} onCommit={v => v > 0 && store.setUI({ doorDefaults: { ...doorDef, U: v } })} /></Row>
+          </> : <>
+            <Row label={t('props.widthM')}><NumberField value={winDef.width} onCommit={v => v > 0.2 && store.setUI({ windowDefaults: { ...winDef, width: v } })} /></Row>
+            <Row label={t('props.heightM')}><NumberField value={winDef.height} onCommit={v => v > 0.2 && store.setUI({ windowDefaults: { ...winDef, height: v } })} /></Row>
+            <Row label={t('props.sillM')}><NumberField value={winDef.sill} onCommit={v => v >= 0 && store.setUI({ windowDefaults: { ...winDef, sill: v } })} /></Row>
+            <Row label={t('props.Uopening')}><NumberField value={winDef.U} digits={2} onCommit={v => v > 0 && store.setUI({ windowDefaults: { ...winDef, U: v } })} /></Row>
+          </>}
+          <p className="muted pad small">{t('props.openingHelp')}</p>
+        </div>
+      ) : fw ? (() => {
         const w = fw.wall
         const updW = (label: string, patch: Partial<Wall>) =>
           updateLevel(label, fw.level.id, l => ({ ...l, walls: l.walls.map(x => (x.id === w.id ? { ...x, ...patch } : x)) }))

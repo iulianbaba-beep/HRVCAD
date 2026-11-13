@@ -111,6 +111,25 @@ export interface Library {
  */
 export type WallJustification = 'center' | 'left' | 'right'
 
+export type OpeningKind = 'door' | 'window'
+
+/** A door or window hosted in a wall; positioned along the wall's reference line from `a`. */
+export interface Opening {
+  id: string
+  kind: OpeningKind
+  /** Distance from wall.a to the opening centre, along a→b, m. */
+  offset: number
+  width: number // m
+  height: number // m
+  sill: number // m above floor level (0 for doors)
+  /** Door hinge at the end nearer to a ('start') or b ('end'). */
+  hinge: 'start' | 'end'
+  /** Door leaf opens towards the wall's left or right side (relative to a→b). */
+  swing: 'left' | 'right'
+  /** Thermal transmittance Uw / Ud, W/m²K (used by heat-load calculation). */
+  U: number
+}
+
 export interface Wall {
   id: string
   typeId: string
@@ -119,6 +138,7 @@ export interface Wall {
   justification: WallJustification
   /** Unconnected height in m; null = level height. */
   height: number | null
+  openings?: Opening[]
 }
 
 export type DisplayUnit = 'mm' | 'cm' | 'm'

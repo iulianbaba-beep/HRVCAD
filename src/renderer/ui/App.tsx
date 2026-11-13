@@ -6,7 +6,7 @@ import { StatusBar } from './StatusBar'
 import { LibraryDialog } from './LibraryDialog'
 import { Viewport } from '../viewport/engine'
 import { store, useStore } from '../core/store'
-import { runCommand } from '../core/commands'
+import { lastCommand, runCommand } from '../core/commands'
 import { tools } from '../tools/tool'
 import { t, APP_VERSION } from '../i18n'
 import { isMac } from '../core/platform'
@@ -14,7 +14,7 @@ import { isMac } from '../core/platform'
 const SHORTCUTS: Record<string, string> = {
   'mod+n': 'file.new', 'mod+o': 'file.open', 'mod+s': 'file.save', 'mod+shift+s': 'file.saveAs',
   'mod+z': 'edit.undo', 'mod+y': 'edit.redo', 'mod+shift+z': 'edit.redo',
-  f3: 'view.snap', f7: 'view.grid', f8: 'view.ortho', delete: 'edit.delete'
+  'mod+a': 'select.all', f3: 'view.snap', f7: 'view.grid', f8: 'view.ortho', delete: 'edit.delete'
 }
 
 function useShortcuts() {
@@ -34,7 +34,12 @@ function useShortcuts() {
       if (e.key === 'Escape') { tools.cancel(); store.setUI({ fileMenuOpen: false }); return }
       // AutoCAD habit: start typing anywhere and it goes to the command line.
       if (!mod && !e.altKey && e.key.length === 1 && e.key !== ' ') { e.preventDefault(); focusCommandLine.fn(e.key) }
-      if (e.key === 'Enter') focusCommandLine.fn()
+      // Enter in the drawing ends the active command (AutoCAD); when idle it repeats the last one.
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (tools.active) { tools.cancel(false); tools.finish() }
+        else { const last = lastCommand(); if (last) runCommand(last) }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
