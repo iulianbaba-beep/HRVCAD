@@ -7,6 +7,7 @@ export type OverlayShape =
   | { kind: 'line'; a: Vec2; b: Vec2; label?: string; dashed?: boolean }
   | { kind: 'point'; p: Vec2 }
   | { kind: 'arc'; c: Vec2; r: number; a0: number; a1: number }
+  | { kind: 'poly'; pts: Vec2[] }
 
 export interface Tool {
   id: string

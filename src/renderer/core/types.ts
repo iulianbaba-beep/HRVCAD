@@ -67,6 +67,58 @@ export interface Level {
   elevation: number // m, finished floor level
   height: number // m, floor-to-floor
   underlays: Underlay[]
+  walls: Wall[]
+}
+
+// ---- Construction library ---------------------------------------------------
+
+export interface Material {
+  id: string
+  name: string
+  /** Design thermal conductivity λ, W/(m·K). */
+  lambda: number
+  /** Density ρ, kg/m³ (informative). */
+  density?: number
+  /** Where the λ value comes from (normative table, manufacturer declaration, user). */
+  source: string
+  /** False until checked against the cited source. */
+  verified: boolean
+}
+
+export interface ConstructionLayer {
+  materialId: string
+  thickness: number // m
+}
+
+export type WallCategory = 'exterior' | 'interior'
+
+export interface WallType {
+  id: string
+  name: string
+  category: WallCategory
+  /** Layers from exterior (or side A) to interior. */
+  layers: ConstructionLayer[]
+}
+
+export interface Library {
+  materials: Material[]
+  wallTypes: WallType[]
+}
+
+/**
+ * Which face of the wall lies on the drawn reference line, relative to the drawing direction a→b.
+ * 'left'  = the reference line is the left face, the wall body extends to the right.
+ */
+export type WallJustification = 'center' | 'left' | 'right'
+
+export interface Wall {
+  id: string
+  typeId: string
+  a: Vec2
+  b: Vec2
+  justification: WallJustification
+  /** Unconnected height in m; null = level height. */
+  height: number | null
 }
 
 export type DisplayUnit = 'mm' | 'cm' | 'm'
@@ -86,6 +138,7 @@ export interface Project {
   createdAt: string
   modifiedAt: string
   settings: ProjectSettings
+  library: Library
   levels: Level[]
 }
 
@@ -93,7 +146,7 @@ export function newId(prefix = 'id'): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`
 }
 
-export function createProject(name = 'Proiect nou'): Project {
+export function createProject(name = 'Proiect nou', library: Library = { materials: [], wallTypes: [] }): Project {
   const now = new Date().toISOString()
   return {
     format: 'hrvcad',
@@ -102,6 +155,7 @@ export function createProject(name = 'Proiect nou'): Project {
     createdAt: now,
     modifiedAt: now,
     settings: { displayUnit: 'm', checkMode: 'advisory', ventilationNorm: 'I5-2022' },
-    levels: [{ id: newId('lvl'), name: 'Parter', elevation: 0, height: 2.8, underlays: [] }]
+    library: structuredClone(library),
+    levels: [{ id: newId('lvl'), name: 'Parter', elevation: 0, height: 2.8, underlays: [], walls: [] }]
   }
 }

@@ -3,6 +3,7 @@ import { Ribbon } from './Ribbon'
 import { ProjectPanel, PropertiesPanel } from './Panels'
 import { CommandLine, focusCommandLine } from './CommandLine'
 import { StatusBar } from './StatusBar'
+import { LibraryDialog } from './LibraryDialog'
 import { Viewport } from '../viewport/engine'
 import { store, useStore } from '../core/store'
 import { runCommand } from '../core/commands'
@@ -13,7 +14,7 @@ import { isMac } from '../core/platform'
 const SHORTCUTS: Record<string, string> = {
   'mod+n': 'file.new', 'mod+o': 'file.open', 'mod+s': 'file.save', 'mod+shift+s': 'file.saveAs',
   'mod+z': 'edit.undo', 'mod+y': 'edit.redo', 'mod+shift+z': 'edit.redo',
-  f3: 'view.snap', f7: 'view.grid', f8: 'view.ortho', delete: 'underlay.delete'
+  f3: 'view.snap', f7: 'view.grid', f8: 'view.ortho', delete: 'edit.delete'
 }
 
 function useShortcuts() {
@@ -24,7 +25,7 @@ function useShortcuts() {
       const combo = [mod ? 'mod' : '', e.shiftKey ? 'shift' : '', e.key.toLowerCase()].filter(Boolean).join('+')
       const id = SHORTCUTS[combo]
       if (id && (!inField || mod || e.key.startsWith('F'))) {
-        if (id === 'underlay.delete' && inField) return
+        if (id === 'edit.delete' && inField) return
         e.preventDefault()
         runCommand(id)
         return
@@ -60,6 +61,7 @@ export function App() {
   useShortcuts()
   const showLeft = useStore(s => s.ui.showProjectPanel)
   const showRight = useStore(s => s.ui.showPropertiesPanel)
+  const libraryOpen = useStore(s => s.ui.libraryOpen)
   useStore(s => s.ui.language)
   useEffect(() => { store.log(t('welcome', { v: APP_VERSION })) }, [])
   return (
@@ -72,6 +74,7 @@ export function App() {
       </main>
       <CommandLine />
       <StatusBar />
+      {libraryOpen && <LibraryDialog />}
     </div>
   )
 }

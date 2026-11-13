@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { TbEye, TbEyeOff, TbLock, TbChevronDown, TbStack2, TbFileImport, TbPhoto, TbFileTypePdf } from 'react-icons/tb'
-import { activeLevel, findUnderlay, store, updateUnderlay, useStore } from '../core/store'
-import type { Underlay } from '../core/types'
-import { formatLength } from '../core/geom'
+import { activeLevel, findUnderlay, findWall, store, updateLevel, updateUnderlay, useStore } from '../core/store'
+import type { Underlay, Wall, WallJustification } from '../core/types'
+import { dist, formatLength } from '../core/geom'
+import { wallTypeThickness, wallTypeU } from '../core/thermal'
+import { runCommand } from '../core/commands'
 import { useT } from '../i18n'
 import { NumberField, TextField } from './fields'
 import { underlayWorldWidth } from '../tools/underlayTools'
@@ -46,7 +48,7 @@ export function ProjectPanel() {
           const open = openLayers[u.id] ?? true
           return (
             <li key={u.id}>
-              <div className={`tree-row${u.id === selected ? ' on' : ''}`} onClick={() => store.setUI({ selectedUnderlayId: u.id })}>
+              <div className={`tree-row${u.id === selected ? ' on' : ''}`} onClick={() => store.setUI({ selectedUnderlayId: u.id, selectedWallId: null })}>
                 {u.kind === 'vector' && (
                   <button className="icon-btn" onClick={e => { e.stopPropagation(); setOpenLayers(o => ({ ...o, [u.id]: !open })) }}>
                     <TbChevronDown style={{ transform: open ? '' : 'rotate(-90deg)' }} />
@@ -101,10 +103,70 @@ export function PropertiesPanel() {
   const updLevel = (patch: Partial<typeof level>) =>
     store.update(t('props.level'), p => ({ ...p, levels: p.levels.map(l => (l.id === level.id ? { ...l, ...patch } : l)) }))
 
+  const selWallId = useStore(s => s.ui.selectedWallId)
+  const tool = useStore(s => s.ui.activeTool)
+  const wallTypeId = useStore(s => s.ui.wallTypeId)
+  const just = useStore(s => s.ui.wallJustification)
+  const fw = findWall(selWallId)
+  const lib = project.library
+
+  const typeSelect = (value: string, onChange: (id: string) => void) => (
+    <select value={value} onChange={e => onChange(e.target.value)}>
+      <optgroup label={t('lib.exterior')}>
+        {lib.wallTypes.filter(w => w.category === 'exterior').map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+      </optgroup>
+      <optgroup label={t('lib.interior')}>
+        {lib.wallTypes.filter(w => w.category === 'interior').map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+      </optgroup>
+    </select>
+  )
+  const justSeg = (value: WallJustification, onChange: (j: WallJustification) => void) => (
+    <div className="seg small">
+      {(['left', 'center', 'right'] as const).map(j => (
+        <button key={j} className={value === j ? 'on' : ''} onClick={() => onChange(j)}>{t(`wall.just.${j}`)}</button>
+      ))}
+    </div>
+  )
+  const typeInfo = (typeId: string) => {
+    const wt = lib.wallTypes.find(w => w.id === typeId)
+    if (!wt) return null
+    const u = wallTypeU(wt, lib)
+    return <>
+      <Row label={t('props.thickness')}><span className="ro">{(wallTypeThickness(wt) * 1000).toFixed(0)} mm</span></Row>
+      <Row label={t('props.uValue')}><span className="ro">{u.U.toFixed(3)} W/m²K {u.unverified && <span className="pill warn">{t('props.unverified')}</span>}</span></Row>
+    </>
+  }
+
   return (
     <aside className="side side-right">
       <div className="side-title">{t('props.title')}</div>
-      {f ? (() => {
+      {fw ? (() => {
+        const w = fw.wall
+        const updW = (label: string, patch: Partial<Wall>) =>
+          updateLevel(label, fw.level.id, l => ({ ...l, walls: l.walls.map(x => (x.id === w.id ? { ...x, ...patch } : x)) }))
+        return (
+          <div className="props">
+            <div className="side-section">{t('props.wall')}</div>
+            <Row label={t('props.wallType')}>{typeSelect(w.typeId, id => updW(t('props.wallType'), { typeId: id }))}</Row>
+            {typeInfo(w.typeId)}
+            <Row label={t('props.justification')}>{justSeg(w.justification, j => updW(t('props.justification'), { justification: j }))}</Row>
+            <Row label={t('props.length')}><span className="ro">{formatLength(dist(w.a, w.b), unit)}</span></Row>
+            <Row label={t('props.wallHeight')}>
+              <NumberField value={w.height ?? fw.level.height} onCommit={v => v > 0 && updW(t('props.wallHeight'), { height: Math.abs(v - fw.level.height) < 1e-6 ? null : v })} />
+            </Row>
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : tool === 'build.wall' ? (
+        <div className="props">
+          <div className="side-section">{t('props.wallOptions')}</div>
+          <Row label={t('props.wallType')}>{typeSelect(wallTypeId, id => store.setUI({ wallTypeId: id }))}</Row>
+          {typeInfo(wallTypeId)}
+          <Row label={t('props.justification')}>{justSeg(just, j => store.setUI({ wallJustification: j }))}</Row>
+          <p className="muted pad small">{t('props.wallHelp')}</p>
+          <div className="pad"><button className="btn" onClick={() => runCommand('library.open')}>{t('cmd.library.open')}…</button></div>
+        </div>
+      ) : f ? (() => {
         const u = f.underlay
         const tr = u.transform
         const upd = (label: string, fn: (x: Underlay) => Underlay) => updateUnderlay(label, u.id, fn)

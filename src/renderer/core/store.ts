@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from 'react'
 import type { Language, Level, Project, Underlay, Vec2 } from './types'
 import { createProject } from './types'
+import { DEFAULT_LIBRARY } from '../library/defaults'
 
 export type ViewMode = '2d' | '3d'
 export interface LogLine { text: string; kind: 'info' | 'cmd' | 'warn' | 'error' }
@@ -11,6 +12,11 @@ export interface UIState {
   viewMode: ViewMode
   activeLevelId: string
   selectedUnderlayId: string | null
+  selectedWallId: string | null
+  /** Wall tool defaults. */
+  wallTypeId: string
+  wallJustification: 'center' | 'left' | 'right'
+  libraryOpen: boolean
   activeTool: string | null
   prompt: string | null
   /** When set, the command line input is collecting a value for the active tool. */
@@ -34,7 +40,7 @@ function loadLanguage(): Language {
   try { return localStorage.getItem('hrvcad.lang') === 'en' ? 'en' : 'ro' } catch { return 'ro' }
 }
 
-const initialProject = createProject()
+const initialProject = createProject('Proiect nou', DEFAULT_LIBRARY)
 let state: AppState = {
   project: initialProject,
   ui: {
@@ -42,6 +48,10 @@ let state: AppState = {
     viewMode: '2d',
     activeLevelId: initialProject.levels[0].id,
     selectedUnderlayId: null,
+    selectedWallId: null,
+    wallTypeId: DEFAULT_LIBRARY.wallTypes[0].id,
+    wallJustification: 'left',
+    libraryOpen: false,
     activeTool: null,
     prompt: null,
     awaitingInput: false,
@@ -93,7 +103,7 @@ export const store = {
     redoStack.length = 0
     state = {
       project: p,
-      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
+      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, selectedWallId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
     }
     emit()
   },
@@ -151,6 +161,19 @@ export function updateUnderlay(label: string, id: string, fn: (u: Underlay) => U
       ? { ...l, underlays: l.underlays.map(u => (u.id === id ? fn(u) : u)) }
       : l)
   }))
+}
+
+export function updateLevel(label: string, levelId: string, fn: (l: Level) => Level) {
+  store.update(label, p => ({ ...p, levels: p.levels.map(l => (l.id === levelId ? fn(l) : l)) }))
+}
+
+export function findWall(id: string | null, s: AppState = state) {
+  if (!id) return null
+  for (const level of s.project.levels) {
+    const wall = level.walls.find(w => w.id === id)
+    if (wall) return { level, wall }
+  }
+  return null
 }
 
 // ---- Simple event bus for viewport actions --------------------------------

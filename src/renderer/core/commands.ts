@@ -6,17 +6,19 @@ import {
   TbStack2, TbWall, TbLayoutBoard, TbBuildingCottage, TbDoor, TbWindow, TbBorderOuter, TbAirConditioning,
   TbCircleDot, TbRouteSquare, TbArrowsJoin, TbBook, TbFlame, TbWind, TbTopologyStar, TbVolume, TbCoin,
   TbSparkles, TbFileText, TbVector, TbFileSpreadsheet, TbSquare, TbCube, TbZoomScan, TbLayoutGrid, TbMagnet,
-  TbAngle, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
+  TbAngle, TbBooks, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
 } from 'react-icons/tb'
 import type { I18nKey } from '../i18n'
 import { t, APP_VERSION } from '../i18n'
-import { activeLevel, emitBus, findUnderlay, store } from './store'
+import { activeLevel, emitBus, findUnderlay, findWall, store, updateLevel } from './store'
 import { createProject, newId, type Level, type Underlay } from './types'
+import { DEFAULT_LIBRARY } from '../library/defaults'
 import { openFile, saveFile } from './platform'
 import { deserializeProject, serializeProject } from './projectFile'
 import { formatLength } from './geom'
 import { tools } from '../tools/tool'
 import { calibrateTool, measureTool, moveTool, rotateTool } from '../tools/underlayTools'
+import { wallTool } from '../tools/wallTool'
 
 export interface Command {
   id: string
@@ -54,7 +56,7 @@ function addUnderlay(u: Underlay) {
     ...p,
     levels: p.levels.map(l => (l.id === levelId ? { ...l, underlays: [...l.underlays, u] } : l))
   }))
-  store.setUI({ selectedUnderlayId: u.id })
+  store.setUI({ selectedUnderlayId: u.id, selectedWallId: null })
   emitBus('zoomExtents')
 }
 
@@ -82,7 +84,7 @@ function startCalibration() {
 const commands: Command[] = [
   // File & edit
   { id: 'file.new', icon: TbFilePlus, aliases: ['NEW', 'NOU'], shortcut: 'Ctrl+N',
-    run: () => { if (confirmDiscard()) { store.replaceProject(createProject(t('app.untitled')), null); emitBus('zoomExtents') } } },
+    run: () => { if (confirmDiscard()) { store.replaceProject(createProject(t('app.untitled'), DEFAULT_LIBRARY), null); emitBus('zoomExtents') } } },
   { id: 'file.open', icon: TbFolderOpen, aliases: ['OPEN', 'DESCHIDE'], shortcut: 'Ctrl+O',
     run: async () => {
       if (!confirmDiscard()) return
@@ -166,7 +168,18 @@ const commands: Command[] = [
       }))
       store.log(t('underlay.lockToggled', { name: f.underlay.name, state: t(locked ? 'underlay.lockedState' : 'underlay.unlockedState') }))
     } },
-  { id: 'underlay.delete', icon: TbTrash, aliases: ['ERASE', 'E', 'STERGE'], shortcut: 'Delete',
+  { id: 'edit.delete', icon: TbTrash, aliases: ['ERASE', 'E', 'STERGE', 'DEL'], shortcut: 'Delete',
+    run: () => {
+      const s = store.get()
+      const w = findWall(s.ui.selectedWallId)
+      if (w) {
+        updateLevel(label('edit.delete'), w.level.id, l => ({ ...l, walls: l.walls.filter(x => x.id !== w.wall.id) }))
+        store.setUI({ selectedWallId: null })
+        return
+      }
+      if (s.ui.selectedUnderlayId) return runCommand('underlay.delete')
+    } },
+  { id: 'underlay.delete', icon: TbTrash, aliases: ['DELPLAN'],
     run: () => {
       const f = findUnderlay(store.get().ui.selectedUnderlayId)
       if (!f) return
@@ -185,13 +198,15 @@ const commands: Command[] = [
       const top = levels.reduce((a, b) => (b.elevation > a.elevation ? b : a))
       const lvl: Level = {
         id: newId('lvl'), name: t('level.defaultName', { n: levels.length }),
-        elevation: +(top.elevation + top.height).toFixed(3), height: top.height, underlays: []
+        elevation: +(top.elevation + top.height).toFixed(3), height: top.height, underlays: [], walls: []
       }
       store.update(label('level.add'), p => ({ ...p, levels: [...p.levels, lvl] }))
       store.setUI({ activeLevelId: lvl.id, selectedUnderlayId: null })
       store.log(t('level.added', { name: lvl.name, e: formatLength(lvl.elevation, 'm') }))
     } },
-  { id: 'build.wall', icon: TbWall, aliases: ['WALL', 'PERETE'], stage: 2 },
+  { id: 'build.wall', icon: TbWall, aliases: ['W', 'WALL', 'PERETE', 'PE'], run: () => tools.start(wallTool()) },
+  { id: 'library.open', icon: TbBooks, aliases: ['LIB', 'BIBLIOTECA', 'MATERIALE', 'TIPURI'],
+    run: () => store.setUI({ libraryOpen: true }) },
   { id: 'build.slab', icon: TbLayoutBoard, aliases: ['SLAB', 'PLANSEU'], stage: 2 },
   { id: 'build.roof', icon: TbBuildingCottage, aliases: ['ROOF', 'ACOPERIS'], stage: 2 },
   { id: 'build.door', icon: TbDoor, aliases: ['DOOR', 'USA'], stage: 2 },

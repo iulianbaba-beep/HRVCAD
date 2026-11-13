@@ -23,8 +23,9 @@ export const ribbon: RibbonTab[] = [
     id: 'building', title: 'tab.building',
     panels: [
       { title: 'panel.levels', buttons: [L('level.add')] },
-      { title: 'panel.elements', buttons: [L('build.wall'), L('build.slab'), L('build.roof'), S('build.door'), S('build.window')] },
-      { title: 'panel.spaces', buttons: [L('build.room')] }
+      { title: 'panel.elements', buttons: [L('build.wall'), L('build.slab'), L('build.roof'), S('build.door'), S('build.window'), S('edit.delete')] },
+      { title: 'panel.spaces', buttons: [L('build.room')] },
+      { title: 'panel.library', buttons: [L('library.open')] }
     ]
   },
   {

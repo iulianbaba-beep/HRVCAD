@@ -2,15 +2,21 @@
 // World units are metres; plan in the XY plane, Z up.
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { Level, RasterUnderlay, Underlay, Vec2, VectorUnderlay } from '../core/types'
+import type { Level, Library, RasterUnderlay, Underlay, Vec2, VectorUnderlay } from '../core/types'
 import { activeLevel, bus, store, type AppState } from '../core/store'
 import { applyTransform } from '../core/geom'
+import { pointInPolygon, wallPolygons } from '../core/walls'
 import { tools, type OverlayShape } from '../tools/tool'
+import { computeSnap, type SnapResult, type SnapSource } from './snap'
 
 const SNAP_PX = 12
 const BG = 0xfbfcfd
 
-interface UnderlayEntry { ref: Underlay; elevation: number; obj: THREE.Object3D; worldSnaps: Float64Array }
+interface UnderlayEntry { ref: Underlay; elevation: number; obj: THREE.Object3D; snap: SnapSource }
+interface WallEntry {
+  walls: Level['walls']; lib: Library; elevation: number; height: number; selected: string | null
+  obj: THREE.Group; polys: Map<string, Vec2[]>; snap: SnapSource
+}
 
 export class Viewport {
   private renderer: THREE.WebGLRenderer
@@ -21,6 +27,9 @@ export class Viewport {
   private grid = new THREE.Group()
   private underlayRoot = new THREE.Group()
   private entries = new Map<string, UnderlayEntry>()
+  private wallEntries = new Map<string, WallEntry>()
+  private wallRoot = new THREE.Group()
+  private acquired: Vec2[] = []
   private textures = new Map<string, THREE.Texture>()
   private w = 1
   private h = 1
@@ -32,7 +41,7 @@ export class Viewport {
   private downAt: { x: number; y: number; t: number } | null = null
   private lastMiddleDown = 0
   private spaceDown = false
-  private hover: { world: Vec2; snapped: boolean } | null = null
+  private hover: SnapResult | null = null
   private screen: { x: number; y: number } | null = null
   private unsub: () => void
   private ro: ResizeObserver
@@ -42,8 +51,11 @@ export class Viewport {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.setClearColor(BG)
     host.prepend(this.renderer.domElement)
-    this.scene.add(this.grid, this.underlayRoot)
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.9))
+    this.scene.add(this.grid, this.underlayRoot, this.wallRoot)
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xc9d3dc, 1.6))
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4)
+    sun.position.set(-30, -50, 80)
+    this.scene.add(sun)
     this.ortho.position.set(0, 0, 500)
     this.ortho.up.set(0, 1, 0)
     this.persp.up.set(0, 0, 1)
@@ -96,6 +108,7 @@ export class Viewport {
     const modeChanged = !prev || prev.ui.viewMode !== s.ui.viewMode
     if (prev && prev.project === s.project && !modeChanged && prev.ui.activeLevelId === s.ui.activeLevelId &&
         prev.ui.grid === s.ui.grid && prev.ui.selectedUnderlayId === s.ui.selectedUnderlayId &&
+        prev.ui.selectedWallId === s.ui.selectedWallId &&
         prev.ui.activeTool === s.ui.activeTool) return
 
     this.grid.visible = s.ui.grid
@@ -117,6 +130,26 @@ export class Viewport {
     }
     for (const [id, e] of this.entries) if (!seen.has(id)) { this.disposeObj(e.obj); this.entries.delete(id) }
 
+    const seenLevels = new Set<string>()
+    for (const level of s.project.levels) {
+      seenLevels.add(level.id)
+      const e = this.wallEntries.get(level.id)
+      const sel = s.ui.selectedWallId
+      if (!e || e.walls !== level.walls || e.lib !== s.project.library || e.elevation !== level.elevation ||
+          e.height !== level.height || e.selected !== sel) {
+        if (e) this.disposeObj(e.obj)
+        this.wallEntries.set(level.id, this.buildWalls(level, s.project.library, sel))
+      }
+      const we = this.wallEntries.get(level.id)!
+      const onActive = level.id === active.id
+      we.obj.visible = this.is3D() || onActive
+      we.obj.traverse(o => {
+        const m = (o as THREE.Mesh).material as THREE.MeshLambertMaterial | undefined
+        if (m && (o as THREE.Mesh).isMesh) { m.opacity = this.is3D() ? 1 : 0.62; m.transparent = !this.is3D() }
+      })
+    }
+    for (const [id, e] of this.wallEntries) if (!seenLevels.has(id)) { this.disposeObj(e.obj); this.wallEntries.delete(id) }
+
     // Tools pick in 3D too; free the left button from orbiting while a tool is active.
     this.controls.mouseButtons.LEFT = s.ui.activeTool ? (null as any) : THREE.MOUSE.ROTATE
     this.controls.enabled = this.is3D()
@@ -131,25 +164,31 @@ export class Viewport {
     g.position.set(u.transform.offset.x, u.transform.offset.y, level.elevation + 0.002)
     g.rotation.z = u.transform.rotation
     g.scale.set(u.transform.scale, u.transform.scale, 1)
-    let worldSnaps = new Float64Array(0)
+    const snap: SnapSource = { points: new Float64Array(0), segs: new Float64Array(0) }
     if (u.kind === 'vector') {
       this.buildVector(g, u)
-      const pts: number[] = []
+      const pts: number[] = [], segs: number[] = []
       for (const l of u.layers) {
         if (!l.visible) continue
         for (let i = 0; i < l.snaps.length; i += 2) {
           const p = applyTransform(u.transform, { x: l.snaps[i], y: l.snaps[i + 1] })
           pts.push(p.x, p.y)
         }
+        for (let i = 0; i < l.segments.length; i += 4) {
+          const a = applyTransform(u.transform, { x: l.segments[i], y: l.segments[i + 1] })
+          const b = applyTransform(u.transform, { x: l.segments[i + 2], y: l.segments[i + 3] })
+          segs.push(a.x, a.y, b.x, b.y)
+        }
       }
-      worldSnaps = new Float64Array(pts)
+      snap.points = new Float64Array(pts)
+      snap.segs = new Float64Array(segs)
     } else {
       this.buildRaster(g, u)
       const c = [[0, 0], [u.pxWidth, 0], [u.pxWidth, u.pxHeight], [0, u.pxHeight]]
-      worldSnaps = new Float64Array(c.flatMap(([x, y]) => { const p = applyTransform(u.transform, { x, y }); return [p.x, p.y] }))
+      snap.points = new Float64Array(c.flatMap(([x, y]) => { const p = applyTransform(u.transform, { x, y }); return [p.x, p.y] }))
     }
     this.underlayRoot.add(g)
-    return { ref: u, elevation: level.elevation, obj: g, worldSnaps }
+    return { ref: u, elevation: level.elevation, obj: g, snap }
   }
 
   private buildVector(g: THREE.Group, u: VectorUnderlay) {
@@ -171,6 +210,42 @@ export class Viewport {
       m.position.set(tx.x, tx.y, 0.001)
       m.rotation.z = tx.rotation
       g.add(m)
+    }
+  }
+
+  private buildWalls(level: Level, lib: Library, selected: string | null): WallEntry {
+    const g = new THREE.Group()
+    const polys = wallPolygons(level.walls, lib)
+    const pts: number[] = [], segs: number[] = []
+    const typeColor = (typeId: string) =>
+      lib.wallTypes.find(t => t.id === typeId)?.category === 'interior' ? 0xb8c2cc : 0x8796a5
+    for (const w of level.walls) {
+      const poly = polys.get(w.id)
+      if (!poly) continue
+      const h = w.height ?? level.height
+      const shape = new THREE.Shape(poly.map(p => new THREE.Vector2(p.x, p.y)))
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false })
+      const isSel = w.id === selected
+      const mat = new THREE.MeshLambertMaterial({ color: isSel ? 0x209ed9 : typeColor(w.typeId), transparent: true })
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.z = level.elevation
+      mesh.userData.wallId = w.id
+      g.add(mesh)
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30),
+        new THREE.LineBasicMaterial({ color: isSel ? 0x0e6e9c : 0x2d3a46, transparent: true, opacity: 0.85 }))
+      edges.position.z = level.elevation
+      g.add(edges)
+      for (let i = 0; i < 4; i++) {
+        const a = poly[i], b = poly[(i + 1) % 4]
+        pts.push(a.x, a.y)
+        segs.push(a.x, a.y, b.x, b.y)
+      }
+      pts.push(w.a.x, w.a.y, w.b.x, w.b.y, (w.a.x + w.b.x) / 2, (w.a.y + w.b.y) / 2)
+    }
+    this.wallRoot.add(g)
+    return {
+      walls: level.walls, lib, elevation: level.elevation, height: level.height, selected, obj: g, polys,
+      snap: { points: new Float64Array(pts), segs: new Float64Array(segs) }
     }
   }
 
@@ -289,6 +364,10 @@ export class Viewport {
       }
       maxZ = Math.max(maxZ, l.elevation + l.height)
     }
+    for (const l of levels) for (const w of l.walls) for (const p of [w.a, w.b]) {
+      minX = Math.min(minX, p.x - 0.5); minY = Math.min(minY, p.y - 0.5); maxX = Math.max(maxX, p.x + 0.5); maxY = Math.max(maxY, p.y + 0.5)
+      maxZ = Math.max(maxZ, l.elevation + l.height)
+    }
     if (!Number.isFinite(minX)) { minX = -2; minY = -2; maxX = 12; maxY = 10 }
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
     const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY)
@@ -325,23 +404,41 @@ export class Viewport {
     return { x: ((v.x + 1) / 2) * this.w, y: ((1 - v.y) / 2) * this.h }
   }
 
-  private findSnap(px: number, py: number, world: Vec2): { world: Vec2; snapped: boolean } {
+  /** World size of one screen pixel at the given screen position. */
+  private worldPerPx(px: number, py: number): number {
+    if (!this.is3D()) return 1 / this.pxPerM
+    const a = this.screenToWorld(px, py), b = this.screenToWorld(px + 1, py)
+    return a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0.01
+  }
+
+  private findSnap(px: number, py: number, world: Vec2): SnapResult {
     const s = store.get()
-    if (!s.ui.snap) return { world, snapped: false }
+    if (!s.ui.snap) return { world, kind: 'none' }
     const lvl = activeLevel(s)
-    let best = SNAP_PX * SNAP_PX, bp: Vec2 | null = null
+    const sources: SnapSource[] = []
     for (const u of lvl.underlays) {
       if (!u.visible) continue
       const e = this.entries.get(u.id)
-      if (!e) continue
-      const a = e.worldSnaps
-      for (let i = 0; i < a.length; i += 2) {
-        const sp = this.worldToScreen({ x: a[i], y: a[i + 1] })
-        const d = (sp.x - px) ** 2 + (sp.y - py) ** 2
-        if (d < best) { best = d; bp = { x: a[i], y: a[i + 1] } }
-      }
+      if (e) sources.push(e.snap)
     }
-    return bp ? { world: bp, snapped: true } : { world, snapped: false }
+    const we = this.wallEntries.get(lvl.id)
+    if (we) sources.push(we.snap)
+    const res = computeSnap({
+      cursor: world, tol: SNAP_PX * this.worldPerPx(px, py), base: tools.active?.basePoint() ?? null,
+      acquired: this.acquired, sources
+    })
+    if (res.kind === 'end' && !this.acquired.some(p => p.x === res.world.x && p.y === res.world.y)) {
+      this.acquired = [res.world, ...this.acquired].slice(0, 6)
+    }
+    return res
+  }
+
+  /** Topmost wall under a world point on the active level. */
+  private hitWall(p: Vec2): string | null {
+    const we = this.wallEntries.get(activeLevel().id)
+    if (!we) return null
+    for (const [id, poly] of we.polys) if (pointInPolygon(p, poly)) return id
+    return null
   }
 
   private hitUnderlay(p: Vec2): string | null {
@@ -410,7 +507,9 @@ export class Viewport {
     if (!w) return
     const target = this.findSnap(p.x, p.y, w).world
     if (tools.active) { tools.pick(target); return }
-    store.setUI({ selectedUnderlayId: this.hitUnderlay(w) })
+    const wall = this.hitWall(w)
+    if (wall) { store.setUI({ selectedWallId: wall, selectedUnderlayId: null }); return }
+    store.setUI({ selectedWallId: null, selectedUnderlayId: this.hitUnderlay(w) })
   }
 
   private onWheel = (e: WheelEvent) => {
@@ -471,10 +570,23 @@ export class Viewport {
 
     // Snap marker + crosshair
     if (this.hover && this.screen) {
-      const c = P(this.hover.world)
-      if (this.hover.snapped) parts.push(`<rect class="ov-snap" x="${c.x - 6}" y="${c.y - 6}" width="12" height="12"/>`)
+      const h = this.hover
+      const c = P(h.world)
+      const snapped = h.kind !== 'none'
+      if (h.seg) {
+        const a = P(h.seg[0]), b = P(h.seg[1])
+        parts.push(`<line class="ov-refline" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`)
+      }
+      for (const [g0, g1] of h.guides ?? []) {
+        const a = P(g0), b = P(g1)
+        parts.push(`<line class="ov-guide" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/><path class="ov-acq" d="M${a.x - 4} ${a.y}H${a.x + 4}M${a.x} ${a.y - 4}V${a.y + 4}"/>`)
+      }
+      if (h.kind === 'end') parts.push(`<rect class="ov-snap" x="${c.x - 6}" y="${c.y - 6}" width="12" height="12"/>`)
+      if (h.kind === 'near') parts.push(`<path class="ov-snap" d="M${c.x - 6} ${c.y - 6}H${c.x + 6}L${c.x - 6} ${c.y + 6}H${c.x + 6}Z"/>`)
+      if (h.kind === 'perp') parts.push(`<path class="ov-snap" d="M${c.x - 6} ${c.y + 6}H${c.x + 6}M${c.x - 6} ${c.y + 6}V${c.y - 6}M${c.x - 6} ${c.y}H${c.x}V${c.y + 6}"/>`)
+      if (h.kind === 'track') parts.push(`<path class="ov-snap track" d="M${c.x - 5} ${c.y - 5}L${c.x + 5} ${c.y + 5}M${c.x + 5} ${c.y - 5}L${c.x - 5} ${c.y + 5}"/>`)
       if (!this.is3D() || tools.active) {
-        const x = this.hover.snapped ? c.x : this.screen.x, y = this.hover.snapped ? c.y : this.screen.y
+        const x = snapped ? c.x : this.screen.x, y = snapped ? c.y : this.screen.y
         const L = tools.active ? 9999 : 18
         parts.push(`<path class="ov-cross" d="M${x - L} ${y}H${x + L}M${x} ${y - L}V${y + L}"/>`)
         if (!tools.active) parts.push(`<rect class="ov-pickbox" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`)
@@ -497,6 +609,10 @@ export class Viewport {
         s += `<g transform="translate(${mx},${my - 10})"><rect class="ov-label-bg" x="${-esc.length * 3.6 - 6}" y="-11" width="${esc.length * 7.2 + 12}" height="18" rx="3"/><text class="ov-label" text-anchor="middle" y="2">${esc}</text></g>`
       }
       return s
+    }
+    if (sh.kind === 'poly') {
+      const pts = sh.pts.map(p => this.worldToScreen(p)).map(p => `${p.x},${p.y}`).join(' ')
+      return `<polygon class="ov-poly" points="${pts}"/>`
     }
     return ''
   }
