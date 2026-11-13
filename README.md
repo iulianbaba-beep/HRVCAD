@@ -4,19 +4,22 @@ Aplicație desktop (Windows + macOS) pentru proiectarea 3D a sistemelor de venti
 
 Flux: plan (DWG/DXF, PDF, imagine) → model clădire 3D → necesar de căldură și debite → trasare tubulatură cu calcul în timp real → memoriu, planșe, listă de materiale.
 
-## Stare: etapa 0 + 1
+## Stare
 
 | # | Etapă | Stare |
 |---|---|---|
-| 0 | Schelet: Electron + React + Three.js, ribbon tip Office/AutoCAD, linie de comandă, RO/EN, fișier proiect `.hrv`, undo/redo | ✅ |
+| 0 | Schelet: Electron + React + Three.js, ribbon tip Office/AutoCAD, linie de comandă, RO/EN, fișier `.hrv`, undo/redo | ✅ |
 | 1 | Import DWG/DXF (LibreDWG WASM), imagine, PDF; calibrare scară, mutare, rotire, măsurare, agățare, orto | ✅ |
-| 2 | Niveluri, pereți cu straturi, planșee, acoperiș, uși/ferestre, camere | ⏳ |
-| 3 | Bază localități + necesar de căldură SR EN 12831-1 / Mc 001 | |
-| 4 | Debite după I5-2022 / DIN 1946-6 / SR EN 16798-1 + echilibrare | |
-| 5 | Editor catalog: recuperatoare, materiale tubulatură, fitinguri | |
-| 6 | Trasare tubulatură + calcul rețea + mod strict/consultativ | |
-| 7 | Calcule termice, acustice, economii | |
-| 8 | Rapoarte PDF / DXF / Excel | |
+| 2 | Pereți cu straturi, TRIM/EXTEND, grip-uri, uși/ferestre, camere detectate automat, planșee, acoperiș cu pantă pe laturi | ✅ |
+| 3 | Necesar de căldură simplificat SR EN 12831-1, localități (zone climatice) | ✅ (date climatice de verificat) |
+| 4 | Debite DIN 1946-6 / I5-2022 / SR EN 16798-1 / personalizat + echilibrare | ✅ (valori I5 / EN de completat) |
+| 5 | Catalog editabil: recuperatoare, tubulatură, guri, distribuitoare | ✅ (produse generice) |
+| 6 | Recuperator, distribuitoare, guri, tubulatură + calcul rețea (Colebrook, pierderi locale, curbă ventilator, reglaj) + mod strict/consultativ | ✅ |
+| 7 | Temperaturi, îngheț, izolație/condens, zgomot estimat, economii anuale | ✅ (estimări) |
+| 8 | Memoriu PDF, planșe PDF, listă materiale XLSX, export DXF | ✅ |
+| 9 | Asistent AI | ⏳ decizie ulterioară |
+
+Toate valorile normative sau de catalog care nu au putut fi verificate sunt marcate „neverificat” în aplicație și în memoriu.
 
 ## Dezvoltare
 

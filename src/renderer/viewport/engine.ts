@@ -9,6 +9,15 @@ import { clipBand, faceOffsets, norm as vnorm, pointInPolygon, sub as vsub, wall
 import { gripTool } from '../tools/modifyTools'
 import { tools, type OverlayShape } from '../tools/tool'
 import { computeSnap, type SnapResult, type SnapSource } from './snap'
+import { roomGeometry } from '../core/rooms'
+import { roofGeometry } from '../core/roof'
+import { analyse } from '../calc'
+import { unitPorts, hydraulicDiameter } from '../calc/network'
+import { t } from '../i18n'
+import type { AirSystem, Project } from '../core/types'
+
+const SYS_COLOR: Record<AirSystem, number> = { supply: 0x1e88e5, extract: 0xf59e0b, outdoor: 0x16a34a, exhaust: 0x8d6e63 }
+const SYS_CSS: Record<AirSystem, string> = { supply: '#1e88e5', extract: '#e08e0b', outdoor: '#16a34a', exhaust: '#8d6e63' }
 
 const SNAP_PX = 12
 const BG = 0xfbfcfd
@@ -31,6 +40,11 @@ export class Viewport {
   private entries = new Map<string, UnderlayEntry>()
   private wallEntries = new Map<string, WallEntry>()
   private wallRoot = new THREE.Group()
+  private buildRoot = new THREE.Group()
+  private hvacRoot = new THREE.Group()
+  private buildKey: unknown[] = []
+  private hvacKey: unknown[] = []
+  private hvacSnap: SnapSource = { points: new Float64Array(0), segs: new Float64Array(0) }
   private acquired: Vec2[] = []
   private textures = new Map<string, THREE.Texture>()
   private w = 1
@@ -54,7 +68,7 @@ export class Viewport {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.setClearColor(BG)
     host.prepend(this.renderer.domElement)
-    this.scene.add(this.grid, this.underlayRoot, this.wallRoot)
+    this.scene.add(this.grid, this.underlayRoot, this.wallRoot, this.buildRoot, this.hvacRoot)
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0xc9d3dc, 1.6))
     const sun = new THREE.DirectionalLight(0xffffff, 1.4)
     sun.position.set(-30, -50, 80)
@@ -112,6 +126,7 @@ export class Viewport {
     if (prev && prev.project === s.project && !modeChanged && prev.ui.activeLevelId === s.ui.activeLevelId &&
         prev.ui.grid === s.ui.grid && prev.ui.selectedUnderlayId === s.ui.selectedUnderlayId &&
         prev.ui.selectedWallIds === s.ui.selectedWallIds && prev.ui.selectedOpeningId === s.ui.selectedOpeningId &&
+        prev.ui.selectedRoomId === s.ui.selectedRoomId && prev.ui.selectedRoofId === s.ui.selectedRoofId && prev.ui.selectedHvacId === s.ui.selectedHvacId &&
         prev.ui.activeTool === s.ui.activeTool) return
 
     this.grid.visible = s.ui.grid
@@ -150,6 +165,13 @@ export class Viewport {
       we.g2.visible = !this.is3D()
     }
     for (const [id, e] of this.wallEntries) if (!seenLevels.has(id)) { this.disposeObj(e.obj); this.wallEntries.delete(id) }
+
+    // Slabs, room floors, roofs
+    const bkey = [s.project.levels, s.project.library, this.is3D(), active.id, s.ui.selectedRoomId, s.ui.selectedRoofId]
+    if (bkey.some((v, i) => v !== this.buildKey[i])) { this.buildKey = bkey; this.buildBuilding(s) }
+    // HVAC
+    const hkey = [s.project, this.is3D(), active.id, s.ui.selectedHvacId]
+    if (hkey.some((v, i) => v !== this.hvacKey[i])) { this.hvacKey = hkey; this.buildHvac(s) }
 
     // Tools pick in 3D too; free the left button from orbiting while a tool is active.
     this.controls.mouseButtons.LEFT = s.ui.activeTool ? (null as any) : THREE.MOUSE.ROTATE
@@ -332,6 +354,180 @@ export class Viewport {
     }
   }
 
+  private clearGroup(g: THREE.Group) { for (const c of [...g.children]) this.disposeObj(c) }
+
+  private buildBuilding(s: AppState) {
+    this.clearGroup(this.buildRoot)
+    const is3D = this.is3D()
+    const active = activeLevel(s)
+    const lib = s.project.library
+    for (const level of s.project.levels) {
+      if (!is3D && level.id !== active.id) continue
+      const z = level.elevation
+      // Room floors (tinted by role) — 2D on the active level, light floors in 3D
+      const geo = roomGeometry(level, lib)
+      for (const r of level.rooms) {
+        const g = geo.get(r.id)
+        if (!g || g.polygon.length < 3) continue
+        const role = ['living', 'bedroom', 'kids', 'study', 'dining', 'guest'].includes(r.type) ? 0xdbeafe
+          : ['kitchen', 'kitchenette', 'bath', 'wc', 'utility', 'sauna', 'storage'].includes(r.type) ? 0xfef3c7 : 0xf1f5f9
+        const sel = r.id === s.ui.selectedRoomId
+        const shape = new THREE.Shape(g.polygon.map(p => new THREE.Vector2(p.x, p.y)))
+        const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({
+          color: sel ? 0xbae6fd : role, transparent: true, opacity: is3D ? 0.9 : sel ? 0.75 : 0.55, depthWrite: false, side: THREE.DoubleSide
+        }))
+        m.position.z = z + 0.012
+        this.buildRoot.add(m)
+      }
+      // Floor slab (3D)
+      if (is3D && level.slab && level.slab.polygon.length >= 3) {
+        const st = lib.slabTypes.find(x => x.id === level.slab!.typeId)
+        const th = st ? st.layers.reduce((a, l) => a + l.thickness, 0) : 0.3
+        const shape = new THREE.Shape(level.slab.polygon.map(p => new THREE.Vector2(p.x, p.y)))
+        const geoS = new THREE.ExtrudeGeometry(shape, { depth: th, bevelEnabled: false })
+        const mesh = new THREE.Mesh(geoS, new THREE.MeshLambertMaterial({ color: 0xc8cdd2 }))
+        mesh.position.z = z - th
+        this.buildRoot.add(mesh)
+      }
+      // Roofs
+      for (const roof of level.roofs) {
+        const rg = roofGeometry(roof, z)
+        const sel = roof.id === s.ui.selectedRoofId
+        if (is3D) {
+          const mat = new THREE.MeshLambertMaterial({ color: sel ? 0x209ed9 : 0xb5523b, side: THREE.DoubleSide, transparent: true, opacity: 0.92 })
+          const gmat = new THREE.MeshLambertMaterial({ color: 0xd8d2c8, side: THREE.DoubleSide })
+          const tri = (poly: { x: number; y: number; z: number }[], m: THREE.Material) => {
+            const pos: number[] = []
+            for (let i = 1; i + 1 < poly.length; i++) for (const v of [poly[0], poly[i], poly[i + 1]]) pos.push(v.x, v.y, v.z)
+            const bg = new THREE.BufferGeometry()
+            bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+            bg.computeVertexNormals()
+            this.buildRoot.add(new THREE.Mesh(bg, m))
+            const ln: number[] = []
+            for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; ln.push(a.x, a.y, a.z, b.x, b.y, b.z) }
+            const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(ln, 3))
+            this.buildRoot.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x5b2a1f })))
+          }
+          for (const f of rg.faces) tri(f, mat)
+          for (const g of rg.gables) tri(g, gmat)
+          if (rg.flat) tri(rg.flat, mat)
+        } else {
+          // Plan: dashed eave outline + ridge/hip lines
+          const ln: number[] = []
+          for (const f of [...rg.faces, ...(rg.flat ? [rg.flat] : [])]) for (let i = 0; i < f.length; i++) {
+            const a = f[i], b = f[(i + 1) % f.length]; ln.push(a.x, a.y, 0, b.x, b.y, 0)
+          }
+          const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(ln, 3))
+          const l = new THREE.LineSegments(lg, new THREE.LineDashedMaterial({ color: sel ? 0x209ed9 : 0xb5523b, dashSize: 0.25, gapSize: 0.15 }))
+          l.computeLineDistances()
+          l.position.z = z + 0.1
+          this.buildRoot.add(l)
+        }
+      }
+    }
+  }
+
+  private buildHvac(s: AppState) {
+    this.clearGroup(this.hvacRoot)
+    const p = s.project
+    const is3D = this.is3D()
+    const active = activeLevel(s)
+    const a = analyse(p)
+    const over = new Set(a.net.segments.filter(x => x.overVelocity).map(x => x.ductId))
+    const pts: number[] = [], segs: number[] = []
+    const sel = s.ui.selectedHvacId
+    const lvlOk = (id: string) => is3D || id === active.id
+    for (const d of p.hvac.ducts) {
+      if (!lvlOk(d.levelId)) continue
+      const mat = p.library.hvac.ductMaterials.find(m => m.id === d.materialId)
+      const size = mat?.sizes.find(x => x.id === d.sizeId) ?? mat?.sizes[0]
+      const dia = size ? hydraulicDiameter(size) : 0.1
+      const color = d.id === sel ? 0x0e2841 : over.has(d.id) ? 0xdc2626 : SYS_COLOR[d.system]
+      for (let i = 0; i + 1 < d.pts.length; i++) {
+        const A = d.pts[i], B = d.pts[i + 1]
+        if (d.levelId === active.id) segs.push(A.x, A.y, B.x, B.y)
+        const len = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z)
+        if (len < 1e-6) continue
+        if (is3D) {
+          const cyl = new THREE.Mesh(new THREE.CylinderGeometry(dia / 2, dia / 2, len, 14), new THREE.MeshLambertMaterial({ color }))
+          cyl.position.set((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2)
+          cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(B.x - A.x, B.y - A.y, B.z - A.z).normalize())
+          this.hvacRoot.add(cyl)
+        } else {
+          const dx = (B.x - A.x) / len, dy = (B.y - A.y) / len, w = Math.max(dia, 0.04) / 2
+          const quad = [A.x - dy * w, A.y + dx * w, B.x - dy * w, B.y + dx * w, B.x + dy * w, B.y - dx * w, A.x + dy * w, A.y - dx * w]
+          const shape = new THREE.Shape([0, 2, 4, 6].map(k => new THREE.Vector2(quad[k], quad[k + 1])))
+          const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }))
+          m.position.z = active.elevation + 0.2
+          this.hvacRoot.add(m)
+        }
+      }
+      for (const q of d.pts) if (d.levelId === active.id) pts.push(q.x, q.y)
+    }
+    const box = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, color: number, rot = 0) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), new THREE.MeshLambertMaterial({ color }))
+      m.position.set(cx, cy, cz); m.rotation.z = rot
+      this.hvacRoot.add(m)
+      if (!is3D) { m.position.z = active.elevation + 0.25; m.scale.z = 0.01 }
+    }
+    for (const u of p.hvac.units) {
+      if (!lvlOk(u.levelId)) continue
+      box(u.pos.x, u.pos.y, u.z + 0.3, 0.7, 0.6, 0.6, u.id === sel ? 0x209ed9 : 0x475569, u.rotation)
+      const ports = unitPorts(u)
+      for (const sys of ['supply', 'extract', 'outdoor', 'exhaust'] as AirSystem[]) {
+        const q = ports[sys]
+        box(q.x, q.y, u.z + 0.3, 0.12, 0.12, 0.12, SYS_COLOR[sys])
+        if (u.levelId === active.id) pts.push(q.x, q.y)
+      }
+    }
+    for (const pl of p.hvac.plenums) {
+      if (!lvlOk(pl.levelId)) continue
+      box(pl.pos.x, pl.pos.y, pl.z, 0.5, 0.3, 0.2, pl.id === sel ? 0x209ed9 : SYS_COLOR[pl.system])
+      if (pl.levelId === active.id) pts.push(pl.pos.x, pl.pos.y)
+    }
+    for (const tr of p.hvac.terminals) {
+      if (!lvlOk(tr.levelId)) continue
+      const tt = p.library.hvac.terminals.find(x => x.id === tr.typeId)
+      const r = (tt?.dn ?? 0.125) / 2 + 0.04
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.03, 24), new THREE.MeshLambertMaterial({ color: tr.id === sel ? 0x0e2841 : SYS_COLOR[tr.system] }))
+      disc.rotation.x = Math.PI / 2
+      disc.position.set(tr.pos.x, tr.pos.y, is3D ? tr.z - 0.02 : active.elevation + 0.3)
+      this.hvacRoot.add(disc)
+      if (tr.levelId === active.id) pts.push(tr.pos.x, tr.pos.y)
+    }
+    this.hvacSnap = { points: new Float64Array(pts), segs: new Float64Array(segs) }
+  }
+
+  /** HVAC element under a plan point. */
+  private hitHvac(p: Vec2): string | null {
+    const pr = store.get().project, lvl = activeLevel().id
+    for (const tr of pr.hvac.terminals) if (tr.levelId === lvl && Math.hypot(tr.pos.x - p.x, tr.pos.y - p.y) < 0.15) return tr.id
+    for (const pl of pr.hvac.plenums) if (pl.levelId === lvl && Math.abs(pl.pos.x - p.x) < 0.3 && Math.abs(pl.pos.y - p.y) < 0.2) return pl.id
+    for (const u of pr.hvac.units) if (u.levelId === lvl && Math.hypot(u.pos.x - p.x, u.pos.y - p.y) < 0.35) return u.id
+    for (const d of pr.hvac.ducts) {
+      if (d.levelId !== lvl) continue
+      for (let i = 0; i + 1 < d.pts.length; i++) {
+        const A = d.pts[i], B = d.pts[i + 1]
+        const dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy || 1
+        const tt = Math.max(0, Math.min(1, ((p.x - A.x) * dx + (p.y - A.y) * dy) / l2))
+        if (Math.hypot(A.x + dx * tt - p.x, A.y + dy * tt - p.y) < 0.12) return d.id
+      }
+    }
+    return null
+  }
+
+  private hitRoom(p: Vec2): string | null {
+    const lvl = activeLevel()
+    const geo = roomGeometry(lvl, store.get().project.library)
+    for (const r of lvl.rooms) { const g = geo.get(r.id); if (g && pointInPolygon(p, g.polygon)) return r.id }
+    return null
+  }
+
+  private hitRoof(p: Vec2): string | null {
+    for (const r of activeLevel().roofs) if (pointInPolygon(p, r.outline)) return r.id
+    return null
+  }
+
   private textMesh(text: string, height: number, color: string): THREE.Mesh {
     const px = 64
     const c = document.createElement('canvas')
@@ -506,6 +702,7 @@ export class Viewport {
     }
     const we = this.wallEntries.get(lvl.id)
     if (we) sources.push(we.snap)
+    sources.push(this.hvacSnap)
     const res = computeSnap({
       cursor: world, tol: SNAP_PX * this.worldPerPx(px, py), base: tools.active?.basePoint() ?? null,
       acquired: this.acquired, sources
@@ -658,17 +855,23 @@ export class Viewport {
     if (tools.active) { tools.pick(target); return }
     const grip = this.hitGrip(p.x, p.y)
     if (grip) { const tl = gripTool(grip.wallId, grip.end); if (tl) tools.start(tl); return }
+    const hv = this.hitHvac(w)
+    if (hv) { store.setUI({ selectedHvacId: hv, selectedWallIds: [], selectedOpeningId: null, selectedUnderlayId: null, selectedRoomId: null, selectedRoofId: null }); return }
     const op = this.hitOpening(w)
-    if (op) { store.setUI({ selectedOpeningId: op, selectedWallIds: [], selectedUnderlayId: null }); return }
+    if (op) { store.setUI({ selectedOpeningId: op, selectedWallIds: [], selectedUnderlayId: null, selectedRoomId: null, selectedRoofId: null, selectedHvacId: null }); return }
     const wall = this.hitWall(w)
     if (wall) {
       const cur = store.get().ui.selectedWallIds
       const ids = e.shiftKey ? (cur.includes(wall) ? cur.filter(x => x !== wall) : [...cur, wall]) : [wall]
-      store.setUI({ selectedWallIds: ids, selectedOpeningId: null, selectedUnderlayId: null })
+      store.setUI({ selectedWallIds: ids, selectedOpeningId: null, selectedUnderlayId: null, selectedRoomId: null, selectedRoofId: null, selectedHvacId: null })
       return
     }
     if (e.shiftKey) return
-    store.setUI({ selectedWallIds: [], selectedOpeningId: null, selectedUnderlayId: this.hitUnderlay(w) })
+    const room = this.hitRoom(w)
+    if (room) { store.setUI({ selectedRoomId: room, selectedWallIds: [], selectedOpeningId: null, selectedUnderlayId: null, selectedRoofId: null, selectedHvacId: null }); return }
+    const roof = this.hitRoof(w)
+    if (roof) { store.setUI({ selectedRoofId: roof, selectedWallIds: [], selectedOpeningId: null, selectedUnderlayId: null, selectedRoomId: null, selectedHvacId: null }); return }
+    store.setUI({ selectedWallIds: [], selectedOpeningId: null, selectedRoomId: null, selectedRoofId: null, selectedHvacId: null, selectedUnderlayId: this.hitUnderlay(w) })
   }
 
   private onWheel = (e: WheelEvent) => {
@@ -724,6 +927,9 @@ export class Viewport {
       }
     }
 
+    // Room tags and HVAC labels (plan)
+    if (!this.is3D()) this.planLabels(s, parts)
+
     // Grips on selected walls (active level)
     if (!this.is3D() && !tools.active) {
       for (const id of s.ui.selectedWallIds) {
@@ -766,6 +972,43 @@ export class Viewport {
       }
     }
     this.overlay.innerHTML = parts.join('')
+  }
+
+  private planLabels(s: AppState, parts: string[]) {
+    const p = s.project, lvl = activeLevel(s)
+    const esc = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    let a: ReturnType<typeof analyse> | null = null
+    try { a = analyse(p) } catch { a = null }
+    const geo = roomGeometry(lvl, p.library)
+    const fmt0 = (v: number) => Math.round(v).toString()
+    for (const r of lvl.rooms) {
+      const g = geo.get(r.id)
+      if (!g) continue
+      const c = this.worldToScreen(r.seed)
+      const rf = a?.air.rooms.find(x => x.roomId === r.id)
+      const flows = rf ? [rf.supply > 0.5 ? `↓${fmt0(rf.supply)}` : '', rf.extract > 0.5 ? `↑${fmt0(rf.extract)}` : ''].filter(Boolean).join(' ') : ''
+      parts.push(`<g class="room-tag${g.ok ? '' : ' bad'}" transform="translate(${c.x},${c.y})"><text y="-4">${esc(r.name)}</text><text class="sub" y="10">${g.area.toFixed(2)} m²${flows ? ' · ' + flows + ' m³/h' : ''}</text></g>`)
+    }
+    if (this.pxPerM < 35 || !a) return
+    for (const sgm of a.net.segments) {
+      const d = p.hvac.ducts.find(x => x.id === sgm.ductId)
+      if (!d || d.levelId !== lvl.id) continue
+      if (sgm.index !== a.net.segments.filter(x => x.ductId === d.id)[0].index || sgm.q < 0.5) continue
+      // label on the longest straight piece, rotated along it
+      let bi = 0, bl = -1
+      for (let i = 0; i + 1 < d.pts.length; i++) { const l = Math.hypot(d.pts[i + 1].x - d.pts[i].x, d.pts[i + 1].y - d.pts[i].y); if (l > bl) { bl = l; bi = i } }
+      const A = this.worldToScreen(d.pts[bi]), B = this.worldToScreen(d.pts[bi + 1])
+      if (Math.hypot(B.x - A.x, B.y - A.y) < 90) continue
+      let ang = (Math.atan2(B.y - A.y, B.x - A.x) * 180) / Math.PI
+      if (ang > 90) ang -= 180; if (ang < -90) ang += 180
+      parts.push(`<text class="duct-tag${sgm.overVelocity ? ' bad' : ''}" transform="translate(${(A.x + B.x) / 2},${(A.y + B.y) / 2}) rotate(${ang.toFixed(1)}) translate(0,-7)" fill="${SYS_CSS[d.system]}">${esc(sgm.sizeLabel)} · ${fmt0(sgm.q)} m³/h · ${sgm.v.toFixed(1)} m/s</text>`)
+    }
+    for (const tr of a.net.terminals) {
+      const term = p.hvac.terminals.find(x => x.id === tr.terminalId)
+      if (!term || term.levelId !== lvl.id) continue
+      const c = this.worldToScreen(term.pos)
+      parts.push(`<text class="term-tag${tr.connected ? '' : ' bad'}" x="${c.x + 10}" y="${c.y + 4}" fill="${SYS_CSS[term.system]}">${fmt0(tr.q)}</text>`)
+    }
   }
 
   private shapeSvg(sh: OverlayShape): string {

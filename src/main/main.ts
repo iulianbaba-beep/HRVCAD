@@ -63,6 +63,20 @@ app.whenReady().then(() => {
     return { name: path.basename(p as string), path: p }
   })
 
+  ipcMain.handle('print:pdf', async (_e: unknown, opts: { html: string; suggestedName: string; landscape: boolean }) => {
+    const r = await dialog.showSaveDialog({ defaultPath: opts.suggestedName, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    if (r.canceled || !r.filePath) return null
+    const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } })
+    const tmp = path.join(app.getPath('temp'), `hrvcad-report-${Date.now()}.html`)
+    await fs.writeFile(tmp, opts.html, 'utf8')
+    await win.loadFile(tmp)
+    const pdf = await win.webContents.printToPDF({ pageSize: 'A4', landscape: opts.landscape, printBackground: true, margins: { marginType: 'default' } })
+    win.destroy()
+    await fs.rm(tmp, { force: true })
+    await fs.writeFile(r.filePath, pdf)
+    return { name: path.basename(r.filePath), path: r.filePath }
+  })
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

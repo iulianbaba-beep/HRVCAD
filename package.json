@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@mlightcad/libredwg-web": "0.8.8",
+    "jszip": "^3.10.1",
     "pdfjs-dist": "6.2.108",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

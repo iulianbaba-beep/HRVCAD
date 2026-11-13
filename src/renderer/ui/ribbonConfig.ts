@@ -23,9 +23,9 @@ export const ribbon: RibbonTab[] = [
     id: 'building', title: 'tab.building',
     panels: [
       { title: 'panel.levels', buttons: [L('level.add')] },
-      { title: 'panel.elements', buttons: [L('build.wall'), L('build.door'), L('build.window'), S('build.slab'), S('build.roof')] },
+      { title: 'panel.elements', buttons: [L('build.wall'), L('build.door'), L('build.window'), L('build.roof')] },
       { title: 'panel.modify', buttons: [L('modify.trim'), L('modify.extend'), S('modify.split'), S('modify.offset'), S('modify.mirror'), S('modify.move'), S('modify.copy'), S('modify.rotate'), S('edit.delete')] },
-      { title: 'panel.spaces', buttons: [L('build.room')] },
+      { title: 'panel.spaces', buttons: [L('build.roomDetect'), L('build.room'), S('build.slab'), S('build.roofAuto')] },
       { title: 'panel.library', buttons: [L('library.open')] }
     ]
   },
@@ -33,15 +33,16 @@ export const ribbon: RibbonTab[] = [
     id: 'hvac', title: 'tab.hvac',
     panels: [
       { title: 'panel.equipment', buttons: [L('hvac.unit'), L('hvac.plenum')] },
-      { title: 'panel.distribution', buttons: [L('hvac.duct'), L('hvac.terminal'), L('hvac.fitting')] },
+      { title: 'panel.distribution', buttons: [L('hvac.terminal'), L('hvac.duct'), L('calc.autosize')] },
       { title: 'panel.catalog', buttons: [L('catalog.editor')] }
     ]
   },
   {
     id: 'calc', title: 'tab.calc',
     panels: [
-      { title: 'panel.loads', buttons: [L('calc.heatload'), L('calc.airflow')] },
-      { title: 'panel.network', buttons: [L('calc.network')] },
+      { title: 'panel.project', buttons: [L('settings.project')] },
+      { title: 'panel.loads', buttons: [L('calc.airflow'), L('calc.heatload')] },
+      { title: 'panel.network', buttons: [L('calc.network'), L('calc.issues')] },
       { title: 'panel.comfort', buttons: [L('calc.acoustic'), L('calc.savings')] },
       { title: 'panel.assist', buttons: [L('ai.assist')] },
       { title: 'panel.settings', buttons: [L('settings.mode')] }
@@ -49,7 +50,7 @@ export const ribbon: RibbonTab[] = [
   },
   {
     id: 'reports', title: 'tab.reports',
-    panels: [{ title: 'panel.documents', buttons: [L('report.memo'), L('report.drawings'), L('report.bom')] }]
+    panels: [{ title: 'panel.documents', buttons: [L('report.memo'), L('report.drawings'), L('report.bom'), L('report.dxf')] }]
   },
   {
     id: 'view', title: 'tab.view',

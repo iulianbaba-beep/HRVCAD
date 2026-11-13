@@ -1,6 +1,6 @@
 // .hrv project file: gzip-compressed JSON of the Project model.
 import type { Project } from './types'
-import { DEFAULT_LIBRARY } from '../library/defaults'
+import { DEFAULT_LIBRARY, DEFAULT_NORMS, DEFAULT_SITE } from '../library/defaults'
 
 async function pipe(data: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> {
   const out = new Blob([data as BlobPart]).stream().pipeThrough(stream)
@@ -26,6 +26,12 @@ export function migrate(p: any): Project {
   p.library ??= structuredClone(DEFAULT_LIBRARY)
   p.library.materials ??= structuredClone(DEFAULT_LIBRARY.materials)
   p.library.wallTypes ??= structuredClone(DEFAULT_LIBRARY.wallTypes)
-  for (const l of p.levels ?? []) { l.underlays ??= []; l.walls ??= [] }
+  p.library.slabTypes ??= structuredClone(DEFAULT_LIBRARY.slabTypes)
+  p.library.hvac ??= structuredClone(DEFAULT_LIBRARY.hvac)
+  p.site ??= structuredClone(DEFAULT_SITE)
+  p.norms ??= structuredClone(DEFAULT_NORMS)
+  p.hvac ??= { units: [], plenums: [], terminals: [], ducts: [] }
+  p.settings.ductBelowCeiling ??= 0.25
+  for (const l of p.levels ?? []) { l.underlays ??= []; l.walls ??= []; l.rooms ??= []; l.slab ??= null; l.roofs ??= []; if (l.ceilingTypeId === undefined) l.ceilingTypeId = 'st_attic_vata25' }
   return p as Project
 }

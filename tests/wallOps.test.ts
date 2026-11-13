@@ -8,7 +8,7 @@ import type { Library, Wall } from '../src/renderer/core/types'
 const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`)
 const W = (id: string, ax: number, ay: number, bx: number, by: number, extra: Partial<Wall> = {}): Wall =>
   ({ id, typeId: 't', a: { x: ax, y: ay }, b: { x: bx, y: by }, justification: 'center', height: null, ...extra })
-const lib: Library = { materials: [{ id: 'm', name: 'M', lambda: 1, source: 's', verified: true }], wallTypes: [{ id: 't', name: 'T', category: 'interior', layers: [{ materialId: 'm', thickness: 0.2 }] }] }
+const lib: Library = { materials: [{ id: 'm', name: 'M', lambda: 1, source: 's', verified: true }], wallTypes: [{ id: 't', name: 'T', category: 'interior', layers: [{ materialId: 'm', thickness: 0.2 }] }], slabTypes: [], hvac: { units: [], ductMaterials: [], terminals: [], plenums: [] } }
 
 test('trim removes the picked middle portion between two crossings', () => {
   const w = W('w', 0, 0, 10, 0)

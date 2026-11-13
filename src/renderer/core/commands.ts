@@ -6,19 +6,21 @@ import {
   TbStack2, TbWall, TbLayoutBoard, TbBuildingCottage, TbDoor, TbWindow, TbBorderOuter, TbAirConditioning,
   TbCircleDot, TbRouteSquare, TbArrowsJoin, TbBook, TbFlame, TbWind, TbTopologyStar, TbVolume, TbCoin,
   TbSparkles, TbFileText, TbVector, TbFileSpreadsheet, TbSquare, TbCube, TbZoomScan, TbLayoutGrid, TbMagnet,
-  TbAngle, TbBooks, TbCopy, TbFlipVertical, TbLayersLinked, TbCut, TbArrowBarToRight, TbSwitchHorizontal, TbSelectAll, TbSeparatorVertical, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
+  TbAngle, TbBooks, TbHomeEco, TbScan, TbAlertTriangle, TbMapPin, TbFileExport, TbCopy, TbFlipVertical, TbLayersLinked, TbCut, TbArrowBarToRight, TbSwitchHorizontal, TbSelectAll, TbSeparatorVertical, TbLayoutSidebar, TbLayoutSidebarRight, TbLanguage, TbShieldCheck
 } from 'react-icons/tb'
 import type { I18nKey } from '../i18n'
 import { t, APP_VERSION } from '../i18n'
 import { activeLevel, emitBus, findOpening, findUnderlay, store, updateLevel } from './store'
-import { createProject, newId, type Level, type Underlay } from './types'
-import { DEFAULT_LIBRARY } from '../library/defaults'
+import { createProject, newLevel, type Level, type Underlay } from './types'
+import { DEFAULT_LIBRARY, PROJECT_DEFAULTS } from '../library/defaults'
 import { openFile, saveFile } from './platform'
 import { deserializeProject, serializeProject } from './projectFile'
 import { formatLength } from './geom'
 import { tools } from '../tools/tool'
 import { calibrateTool, measureTool, moveTool, rotateTool } from '../tools/underlayTools'
 import { wallTool } from '../tools/wallTool'
+import { autoRoof, autoSlab, detectRooms, roofTool, roomTool } from '../tools/buildTools'
+import { applyAutoSize, deleteHvac, ductTool, plenumTool, terminalTool, unitTool } from '../tools/hvacTools'
 import {
   extendTool, flipSelected, mirrorWallsTool, moveWallsTool, offsetTool, openingTool, rotateWallsTool, selectAllWalls, splitTool, trimTool
 } from '../tools/modifyTools'
@@ -87,7 +89,7 @@ function startCalibration() {
 const commands: Command[] = [
   // File & edit
   { id: 'file.new', icon: TbFilePlus, aliases: ['NEW', 'NOU'], shortcut: 'Ctrl+N',
-    run: () => { if (confirmDiscard()) { store.replaceProject(createProject(t('app.untitled'), DEFAULT_LIBRARY), null); emitBus('zoomExtents') } } },
+    run: () => { if (confirmDiscard()) { store.replaceProject(createProject(t('app.untitled'), PROJECT_DEFAULTS), null); emitBus('zoomExtents') } } },
   { id: 'file.open', icon: TbFolderOpen, aliases: ['OPEN', 'DESCHIDE'], shortcut: 'Ctrl+O',
     run: async () => {
       if (!confirmDiscard()) return
@@ -188,6 +190,17 @@ const commands: Command[] = [
         store.setUI({ selectedWallIds: [] })
         return
       }
+      if (s.ui.selectedHvacId) { deleteHvac(s.ui.selectedHvacId); store.setUI({ selectedHvacId: null }); return }
+      if (s.ui.selectedRoomId) {
+        const rid = s.ui.selectedRoomId
+        store.update(label('edit.delete'), p => ({ ...p, levels: p.levels.map(l => ({ ...l, rooms: l.rooms.filter(r => r.id !== rid) })) }))
+        store.setUI({ selectedRoomId: null }); return
+      }
+      if (s.ui.selectedRoofId) {
+        const rid = s.ui.selectedRoofId
+        store.update(label('edit.delete'), p => ({ ...p, levels: p.levels.map(l => ({ ...l, roofs: l.roofs.filter(r => r.id !== rid) })) }))
+        store.setUI({ selectedRoofId: null }); return
+      }
       if (s.ui.selectedUnderlayId) return runCommand('underlay.delete')
     } },
   { id: 'select.all', icon: TbSelectAll, aliases: ['ALL', 'SELECTALL', 'TOT'], shortcut: 'Ctrl+A', run: selectAllWalls },
@@ -225,43 +238,46 @@ const commands: Command[] = [
     run: () => {
       const levels = store.get().project.levels
       const top = levels.reduce((a, b) => (b.elevation > a.elevation ? b : a))
-      const lvl: Level = {
-        id: newId('lvl'), name: t('level.defaultName', { n: levels.length }),
-        elevation: +(top.elevation + top.height).toFixed(3), height: top.height, underlays: [], walls: []
-      }
-      store.update(label('level.add'), p => ({ ...p, levels: [...p.levels, lvl] }))
+      const lvl: Level = newLevel(t('level.defaultName', { n: levels.length }), +(top.elevation + top.height).toFixed(3), top.height)
+      store.update(label('level.add'), p => ({ ...p, levels: [...p.levels.map(l => (l.id === top.id ? { ...l, ceilingTypeId: null } : l)), lvl] }))
       store.setUI({ activeLevelId: lvl.id, selectedUnderlayId: null })
       store.log(t('level.added', { name: lvl.name, e: formatLength(lvl.elevation, 'm') }))
     } },
   { id: 'build.wall', icon: TbWall, aliases: ['W', 'WALL', 'PERETE', 'PE'], run: () => tools.start(wallTool()) },
   { id: 'library.open', icon: TbBooks, aliases: ['LIB', 'BIBLIOTECA', 'MATERIALE', 'TIPURI'],
-    run: () => store.setUI({ libraryOpen: true }) },
-  { id: 'build.slab', icon: TbLayoutBoard, aliases: ['SLAB', 'PLANSEU'], stage: 2 },
-  { id: 'build.roof', icon: TbBuildingCottage, aliases: ['ROOF', 'ACOPERIS'], stage: 2 },
+    run: () => store.setUI({ libraryOpen: true, libraryTab: 'walls' }) },
+  { id: 'build.slab', icon: TbLayoutBoard, aliases: ['SLAB', 'PLANSEU'], run: autoSlab },
+  { id: 'build.roof', icon: TbBuildingCottage, aliases: ['ROOF', 'ACOPERIS'], run: () => tools.start(roofTool()) },
+  { id: 'build.roofAuto', icon: TbHomeEco, aliases: ['ROOFAUTO', 'ACOPERISAUTO'], run: () => autoRoof() },
   { id: 'build.door', icon: TbDoor, aliases: ['DOOR', 'USA', 'DR'], run: () => tools.start(openingTool('door')) },
   { id: 'build.window', icon: TbWindow, aliases: ['WINDOW', 'FEREASTRA', 'WIN'], run: () => tools.start(openingTool('window')) },
-  { id: 'build.room', icon: TbBorderOuter, aliases: ['ROOM', 'CAMERA'], stage: 2 },
+  { id: 'build.room', icon: TbBorderOuter, aliases: ['ROOM', 'CAMERA', 'RM'], run: () => tools.start(roomTool()) },
+  { id: 'build.roomDetect', icon: TbScan, aliases: ['DETECT', 'DETECTEAZA', 'ROOMS'], run: detectRooms },
 
   // HVAC
-  { id: 'hvac.unit', icon: TbAirConditioning, aliases: ['HRV', 'RECUPERATOR'], stage: 6 },
-  { id: 'hvac.plenum', icon: TbArrowsJoin, aliases: ['PLENUM', 'DISTRIBUITOR'], stage: 6 },
-  { id: 'hvac.terminal', icon: TbCircleDot, aliases: ['VALVE', 'GURA'], stage: 6 },
-  { id: 'hvac.duct', icon: TbRouteSquare, aliases: ['DUCT', 'TUB'], stage: 6 },
+  { id: 'hvac.unit', icon: TbAirConditioning, aliases: ['HRV', 'RECUPERATOR'], run: () => tools.start(unitTool()) },
+  { id: 'hvac.plenum', icon: TbArrowsJoin, aliases: ['PLENUM', 'DISTRIBUITOR'], run: () => tools.start(plenumTool()) },
+  { id: 'hvac.terminal', icon: TbCircleDot, aliases: ['VALVE', 'GURA'], run: () => tools.start(terminalTool()) },
+  { id: 'hvac.duct', icon: TbRouteSquare, aliases: ['DUCT', 'TUB'], run: () => tools.start(ductTool()) },
   { id: 'hvac.fitting', icon: TbVector, aliases: ['FITTING', 'FITING'], stage: 6 },
-  { id: 'catalog.editor', icon: TbBook, aliases: ['CATALOG'], stage: 5 },
+  { id: 'catalog.editor', icon: TbBook, aliases: ['CATALOG'], run: () => store.setUI({ libraryOpen: true, libraryTab: 'hvac' }) },
 
   // Calculations
-  { id: 'calc.heatload', icon: TbFlame, aliases: ['HEATLOAD', 'NECESAR'], stage: 3 },
-  { id: 'calc.airflow', icon: TbWind, aliases: ['AIRFLOW', 'DEBITE'], stage: 4 },
-  { id: 'calc.network', icon: TbTopologyStar, aliases: ['NETWORK', 'RETEA'], stage: 6 },
-  { id: 'calc.acoustic', icon: TbVolume, aliases: ['ACOUSTIC', 'ZGOMOT'], stage: 7 },
-  { id: 'calc.savings', icon: TbCoin, aliases: ['SAVINGS', 'ECONOMII'], stage: 7 },
+  { id: 'calc.heatload', icon: TbFlame, aliases: ['HEATLOAD', 'NECESAR'], run: () => store.setUI({ resultsOpen: 'heat' }) },
+  { id: 'calc.airflow', icon: TbWind, aliases: ['AIRFLOW', 'DEBITE'], run: () => store.setUI({ resultsOpen: 'air' }) },
+  { id: 'calc.network', icon: TbTopologyStar, aliases: ['NETWORK', 'RETEA'], run: () => store.setUI({ resultsOpen: 'net' }) },
+  { id: 'calc.autosize', icon: TbRulerMeasure, aliases: ['AUTOSIZE', 'DIMENSIONARE'], run: () => applyAutoSize(true) },
+  { id: 'calc.issues', icon: TbAlertTriangle, aliases: ['CHECK', 'VERIFICA'], run: () => store.setUI({ resultsOpen: 'issues' }) },
+  { id: 'settings.project', icon: TbMapPin, aliases: ['PROJECT', 'DATE', 'SITE'], run: () => store.setUI({ projectDialog: true }) },
+  { id: 'calc.acoustic', icon: TbVolume, aliases: ['ACOUSTIC', 'ZGOMOT'], run: () => store.setUI({ resultsOpen: 'energy' }) },
+  { id: 'calc.savings', icon: TbCoin, aliases: ['SAVINGS', 'ECONOMII'], run: () => store.setUI({ resultsOpen: 'energy' }) },
   { id: 'ai.assist', icon: TbSparkles, aliases: ['AI'], stage: 9 },
 
   // Reports
-  { id: 'report.memo', icon: TbFileText, aliases: ['MEMORIU', 'REPORT'], stage: 8 },
-  { id: 'report.drawings', icon: TbVector, aliases: ['PLANSE', 'PLOT'], stage: 8 },
-  { id: 'report.bom', icon: TbFileSpreadsheet, aliases: ['BOM', 'MATERIALE'], stage: 8 },
+  { id: 'report.memo', icon: TbFileText, aliases: ['MEMORIU', 'REPORT'], run: async () => (await import('../reports/memo')).exportMemo() },
+  { id: 'report.drawings', icon: TbVector, aliases: ['PLANSE', 'PLOT'], run: async () => (await import('../reports/memo')).exportDrawingsPdf() },
+  { id: 'report.dxf', icon: TbFileExport, aliases: ['DXFOUT', 'EXPORTDXF'], run: async () => (await import('../reports/dxf')).exportDxf() },
+  { id: 'report.bom', icon: TbFileSpreadsheet, aliases: ['BOM', 'MATERIALE'], run: async () => (await import('../reports/bom')).exportBom() },
 
   // View
   { id: 'view.2d', icon: TbSquare, aliases: ['2D', 'PLAN'], checked: () => store.get().ui.viewMode === '2d',

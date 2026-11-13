@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { TbEye, TbEyeOff, TbLock, TbChevronDown, TbStack2, TbFileImport, TbPhoto, TbFileTypePdf } from 'react-icons/tb'
 import { activeLevel, findOpening, findUnderlay, findWall, store, updateLevel, updateUnderlay, useStore } from '../core/store'
-import type { Opening, Underlay, Wall, WallJustification } from '../core/types'
+import type { AirSystem, Opening, Roof, Room, Underlay, Wall, WallJustification } from '../core/types'
+import { roomGeometry, ROOM_TYPES } from '../core/rooms'
+import { roofGeometry } from '../core/roof'
+import { updateHvac } from '../core/store'
+import { analyse } from '../calc'
 import { dist, formatLength } from '../core/geom'
 import { wallTypeThickness, wallTypeU } from '../core/thermal'
 import { runCommand } from '../core/commands'
@@ -104,6 +108,11 @@ export function PropertiesPanel() {
     store.update(t('props.level'), p => ({ ...p, levels: p.levels.map(l => (l.id === level.id ? { ...l, ...patch } : l)) }))
 
   const selWallIds = useStore(s => s.ui.selectedWallIds)
+  const selRoomId = useStore(s => s.ui.selectedRoomId)
+  const selRoofId = useStore(s => s.ui.selectedRoofId)
+  const selHvacId = useStore(s => s.ui.selectedHvacId)
+  const roomTypeUi = useStore(s => s.ui.roomType)
+  const ui = useStore(s => s.ui)
   const selOpeningId = useStore(s => s.ui.selectedOpeningId)
   const doorDef = useStore(s => s.ui.doorDefaults)
   const winDef = useStore(s => s.ui.windowDefaults)
@@ -144,7 +153,167 @@ export function PropertiesPanel() {
   return (
     <aside className="side side-right">
       <div className="side-title">{t('props.title')}</div>
-      {fo ? (() => {
+      {selRoomId ? (() => {
+        const lv = project.levels.find(l => l.rooms.some(r => r.id === selRoomId))
+        const r = lv?.rooms.find(x => x.id === selRoomId)
+        if (!lv || !r) return null
+        const g = roomGeometry(lv, lib).get(r.id)
+        const rf = analyse(project).air.rooms.find(x => x.roomId === r.id)
+        const hr = analyse(project).heat.rooms.find(x => x.roomId === r.id)
+        const updR = (label: string, patch: Partial<Room>) => updateLevel(label, lv.id, l => ({ ...l, rooms: l.rooms.map(x => (x.id === r.id ? { ...x, ...patch } : x)) }))
+        const opt = (v: number | null, on: (n: number | null) => void, ph: string) =>
+          <input placeholder={ph} defaultValue={v ?? ''} key={`${r.id}${v}`} onBlur={e => { const n = parseFloat(e.target.value.replace(',', '.')); on(Number.isFinite(n) ? n : null) }} onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+        return (
+          <div className="props">
+            <div className="side-section">{t('props.room')}</div>
+            <Row label={t('props.name')}><TextField value={r.name} onCommit={v => updR(t('props.name'), { name: v || r.name })} /></Row>
+            <Row label={t('res.type')}>
+              <select value={r.type} onChange={e => updR(t('res.type'), { type: e.target.value as Room['type'] })}>
+                {ROOM_TYPES.map(x => <option key={x} value={x}>{t(`room.${x}` as any)}</option>)}
+              </select>
+            </Row>
+            <Row label={t('props.area')}><span className="ro">{g ? `${g.area.toFixed(2)} m²` : '—'} {g && !g.ok && <span className="pill warn">{t('props.roomOpen')}</span>}</span></Row>
+            <Row label={t('props.tempInt')}>{opt(r.tempInt, v => updR(t('props.tempInt'), { tempInt: v }), String(analyse(project).air.profile.rooms[r.type]?.tempInt ?? 20))}</Row>
+            <Row label={t('props.persons')}>{opt(r.persons, v => updR(t('props.persons'), { persons: v }), '—')}</Row>
+            <Row label={t('props.supplyQ')}>{opt(r.supplyOverride, v => updR(t('props.supplyQ'), { supplyOverride: v }), rf ? Math.round(rf.supply).toString() : '0')}</Row>
+            <Row label={t('props.extractQ')}>{opt(r.extractOverride, v => updR(t('props.extractQ'), { extractOverride: v }), rf ? Math.round(rf.extract).toString() : '0')}</Row>
+            {hr && <Row label={t('props.heatLoad')}><span className="ro"><b>{Math.round(hr.phi)} W</b> ({Math.round(hr.phi / Math.max(hr.area, 0.1))} W/m²)</span></Row>}
+            <p className="muted pad small">{t('props.roomHelp')}</p>
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : selRoofId ? (() => {
+        const lv = project.levels.find(l => l.roofs.some(r => r.id === selRoofId))
+        const rf = lv?.roofs.find(x => x.id === selRoofId)
+        if (!lv || !rf) return null
+        const geo = roofGeometry(rf, lv.elevation)
+        const updRf = (label: string, patch: Partial<Roof>) => updateLevel(label, lv.id, l => ({ ...l, roofs: l.roofs.map(x => (x.id === rf.id ? { ...x, ...patch } : x)) }))
+        const preset = (kind: 'hip' | 'gable' | 'mono' | 'flat') => {
+          const n = rf.outline.length
+          const pitch = Math.max(...rf.slopes, 0) || 35
+          // gable: pitch the two longest opposite edges; mono: only the longest edge
+          const lens = rf.outline.map((a, i) => Math.hypot(rf.outline[(i + 1) % n].x - a.x, rf.outline[(i + 1) % n].y - a.y))
+          const longest = lens.indexOf(Math.max(...lens))
+          const slopes = rf.outline.map((_, i) => kind === 'hip' ? pitch : kind === 'flat' ? 0
+            : kind === 'mono' ? (i === longest ? pitch : 0)
+            : (n === 4 ? (i % 2 === longest % 2 ? pitch : 0) : (i === longest || i === (longest + Math.floor(n / 2)) % n ? pitch : 0)))
+          updRf(t('props.roof'), { slopes })
+        }
+        return (
+          <div className="props">
+            <div className="side-section">{t('props.roof')}</div>
+            <Row label={t('lib.category')}>
+              <select value={rf.typeId} onChange={e => updRf(t('props.roof'), { typeId: e.target.value })}>
+                {lib.slabTypes.filter(x => x.category === 'roof').map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+            </Row>
+            <Row label={t('props.eave')}><NumberField value={rf.eaveHeight} onCommit={v => v >= 0 && updRf(t('props.eave'), { eaveHeight: v })} /></Row>
+            <Row label={t('props.form')}>
+              <div className="seg small">
+                {(['hip', 'gable', 'mono', 'flat'] as const).map(k => <button key={k} onClick={() => preset(k)}>{t(`roof.${k}` as any)}</button>)}
+              </div>
+            </Row>
+            <div className="side-section">{t('props.edgePitch')}</div>
+            {rf.outline.map((a, i) => {
+              const b = rf.outline[(i + 1) % rf.outline.length]
+              return <Row key={i} label={`${t('props.edge')} ${i + 1} (${Math.hypot(b.x - a.x, b.y - a.y).toFixed(2)} m)`}>
+                <NumberField value={rf.slopes[i] ?? 0} digits={1} onCommit={v => v >= 0 && v <= 75 && updRf(t('props.edgePitch'), { slopes: rf.slopes.map((s0, j) => (j === i ? v : s0)) })} />
+              </Row>
+            })}
+            <Row label={t('props.ridge')}><span className="ro">{(geo.ridgeZ - lv.elevation).toFixed(2)} m · {geo.area.toFixed(1)} m²</span></Row>
+            <p className="muted pad small">{t('props.roofHelp')}</p>
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : selHvacId ? (() => {
+        const h = project.hvac
+        const a = analyse(project)
+        const term = h.terminals.find(x => x.id === selHvacId), duct = h.ducts.find(x => x.id === selHvacId)
+        const pl = h.plenums.find(x => x.id === selHvacId), un = h.units.find(x => x.id === selHvacId)
+        const sysSel = (v: AirSystem, on: (s: AirSystem) => void) => (
+          <select value={v} onChange={e => on(e.target.value as AirSystem)}>{(['supply', 'extract', 'outdoor', 'exhaust'] as const).map(s => <option key={s} value={s}>{t(`system.${s}` as any)}</option>)}</select>)
+        return (
+          <div className="props">
+            {un && <>
+              <div className="side-section">{t('cmd.hvac.unit')}</div>
+              <Row label={t('res.type')}><select value={un.typeId} onChange={e => updateHvac(t('cmd.hvac.unit'), x => ({ ...x, units: x.units.map(u => (u.id === un.id ? { ...u, typeId: e.target.value } : u)) }))}>
+                {lib.hvac.units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
+              <Row label={t('props.rotation')}><NumberField value={(un.rotation * 180) / Math.PI} digits={1} onCommit={v => updateHvac(t('props.rotation'), x => ({ ...x, units: x.units.map(u => (u.id === un.id ? { ...u, rotation: (v * Math.PI) / 180 } : u)) }))} /></Row>
+              <Row label={t('res.supplySide')}><span className="ro">{Math.round(a.net.requiredSupplySide)} / {a.net.availableSupplySide == null ? '—' : Math.round(a.net.availableSupplySide)} Pa</span></Row>
+              <Row label={t('res.extractSide')}><span className="ro">{Math.round(a.net.requiredExtractSide)} / {a.net.availableExtractSide == null ? '—' : Math.round(a.net.availableExtractSide)} Pa</span></Row>
+              <p className="muted pad small">{t('props.unitHelp')}</p>
+            </>}
+            {pl && <>
+              <div className="side-section">{t('cmd.hvac.plenum')}</div>
+              <Row label={t('res.type')}><select value={pl.typeId} onChange={e => updateHvac(t('cmd.hvac.plenum'), x => ({ ...x, plenums: x.plenums.map(u => (u.id === pl.id ? { ...u, typeId: e.target.value } : u)) }))}>
+                {lib.hvac.plenums.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
+              <Row label={t('res.system')}>{sysSel(pl.system, s => (s === 'supply' || s === 'extract') && updateHvac(t('res.system'), x => ({ ...x, plenums: x.plenums.map(u => (u.id === pl.id ? { ...u, system: s } : u)) })))}</Row>
+            </>}
+            {term && (() => {
+              const tr = a.net.terminals.find(x => x.terminalId === term.id)
+              return <>
+                <div className="side-section">{t('cmd.hvac.terminal')}</div>
+                <Row label={t('res.type')}><select value={term.typeId} onChange={e => updateHvac(t('cmd.hvac.terminal'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, typeId: e.target.value } : u)) }))}>
+                  {lib.hvac.terminals.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
+                <Row label={t('res.system')}>{sysSel(term.system, s => updateHvac(t('res.system'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, system: s } : u)) })))}</Row>
+                <Row label={t('props.flowQ')}><input placeholder={tr ? Math.round(tr.q).toString() : ''} defaultValue={term.flowOverride ?? ''} key={term.id + term.flowOverride}
+                  onBlur={e => { const n = parseFloat(e.target.value.replace(',', '.')); updateHvac(t('props.flowQ'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, flowOverride: Number.isFinite(n) ? n : null } : u)) })) }} /></Row>
+                {tr && <Row label={t('res.throttle')}><span className="ro">{tr.connected ? `${tr.throttle.toFixed(1)} Pa` : t('res.notConnected')}</span></Row>}
+              </>
+            })()}
+            {duct && (() => {
+              const mat = lib.hvac.ductMaterials.find(m => m.id === duct.materialId)
+              const segs = a.net.segments.filter(x => x.ductId === duct.id)
+              const L = duct.pts.slice(1).reduce((s0, q, i) => s0 + Math.hypot(q.x - duct.pts[i].x, q.y - duct.pts[i].y), 0)
+              const updD = (patch: Partial<typeof duct>) => updateHvac(t('cmd.hvac.duct'), x => ({ ...x, ducts: x.ducts.map(u => (u.id === duct.id ? { ...u, ...patch } : u)) }))
+              return <>
+                <div className="side-section">{t('cmd.hvac.duct')}</div>
+                <Row label={t('res.system')}>{sysSel(duct.system, s => updD({ system: s }))}</Row>
+                <Row label={t('lib.material')}><select value={duct.materialId} onChange={e => { const m = lib.hvac.ductMaterials.find(x => x.id === e.target.value)!; updD({ materialId: m.id, sizeId: m.sizes[0].id, locked: false }) }}>
+                  {lib.hvac.ductMaterials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Row>
+                <Row label={t('res.size')}><select value={duct.sizeId} onChange={e => updD({ sizeId: e.target.value, locked: true })}>
+                  {mat?.sizes.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}</select></Row>
+                <Row label={t('props.locked')}><input type="checkbox" checked={duct.locked} onChange={e => updD({ locked: e.target.checked })} /></Row>
+                <Row label={t('props.length')}><span className="ro">{L.toFixed(2)} m</span></Row>
+                {segs.map((sg, i) => <Row key={i} label={`q · v`}><span className={`ro${sg.overVelocity ? ' bad-text' : ''}`}>{Math.round(sg.q)} m³/h · {sg.v.toFixed(2)} m/s · {(sg.dpFriction + sg.dpLocal).toFixed(1)} Pa</span></Row>)}
+              </>
+            })()}
+            <div className="pad"><button className="btn danger" onClick={() => runCommand('edit.delete')}>{t('cmd.edit.delete')}</button></div>
+          </div>
+        )
+      })() : (tool === 'build.room') ? (
+        <div className="props">
+          <div className="side-section">{t('cmd.build.room')}</div>
+          <Row label={t('res.type')}><select value={roomTypeUi} onChange={e => store.setUI({ roomType: e.target.value as Room['type'] })}>
+            {ROOM_TYPES.map(x => <option key={x} value={x}>{t(`room.${x}` as any)}</option>)}</select></Row>
+          <p className="muted pad small">{t('props.roomToolHelp')}</p>
+        </div>
+      ) : (tool === 'hvac.duct' || tool === 'hvac.unit' || tool === 'hvac.plenum' || tool === 'hvac.terminal') ? (
+        <div className="props">
+          <div className="side-section">{t(`cmd.${tool}` as any)}</div>
+          {tool === 'hvac.unit' && <Row label={t('res.type')}><select value={ui.unitTypeId} onChange={e => store.setUI({ unitTypeId: e.target.value })}>
+            {lib.hvac.units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>}
+          {tool === 'hvac.plenum' && <>
+            <Row label={t('res.type')}><select value={ui.plenumTypeId} onChange={e => store.setUI({ plenumTypeId: e.target.value })}>
+              {lib.hvac.plenums.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
+            <Row label={t('res.system')}><div className="seg small">
+              {(['supply', 'extract'] as const).map(s => <button key={s} className={ui.plenumSystem === s ? 'on' : ''} onClick={() => store.setUI({ plenumSystem: s })}>{t(`system.${s}` as any)}</button>)}</div></Row>
+          </>}
+          {tool === 'hvac.terminal' && <Row label={t('res.system')}><select value={ui.terminalSystem} onChange={e => store.setUI({ terminalSystem: e.target.value as any })}>
+            <option value="auto">{t('system.auto')}</option>
+            {(['supply', 'extract', 'outdoor', 'exhaust'] as const).map(s => <option key={s} value={s}>{t(`system.${s}` as any)}</option>)}</select></Row>}
+          {tool === 'hvac.duct' && <>
+            <Row label={t('res.system')}><select value={ui.ductSystem} onChange={e => store.setUI({ ductSystem: e.target.value as AirSystem })}>
+              {(['supply', 'extract', 'outdoor', 'exhaust'] as const).map(s => <option key={s} value={s}>{t(`system.${s}` as any)}</option>)}</select></Row>
+            <Row label={t('lib.material')}><select value={ui.ductMaterialId} onChange={e => store.setUI({ ductMaterialId: e.target.value, ductSizeId: 'auto' })}>
+              {lib.hvac.ductMaterials.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></Row>
+            <Row label={t('res.size')}><select value={ui.ductSizeId} onChange={e => store.setUI({ ductSizeId: e.target.value })}>
+              <option value="auto">{t('props.autoSize')}</option>
+              {lib.hvac.ductMaterials.find(m => m.id === ui.ductMaterialId)?.sizes.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}</select></Row>
+          </>}
+          <p className="muted pad small">{t(`help.${tool}` as any)}</p>
+        </div>
+      ) : fo ? (() => {
         const { wall: w, opening: o, level: lv } = fo
         const updO = (label: string, patch: Partial<Opening>) =>
           updateLevel(label, lv.id, l => ({
@@ -276,6 +445,18 @@ export function PropertiesPanel() {
           <Row label={t('props.name')}><TextField value={level.name} onCommit={v => updLevel({ name: v || level.name })} /></Row>
           <Row label={t('props.elevation')}><NumberField value={level.elevation} onCommit={v => updLevel({ elevation: v })} /></Row>
           <Row label={t('props.height')}><NumberField value={level.height} onCommit={v => v > 0 && updLevel({ height: v })} /></Row>
+          <Row label={t('props.slab')}>
+            <select value={level.slab?.typeId ?? ''} onChange={e => e.target.value ? (level.slab ? updLevel({ slab: { ...level.slab, typeId: e.target.value } }) : runCommand('build.slab')) : updLevel({ slab: null })}>
+              <option value="">—</option>
+              {project.library.slabTypes.filter(x => x.category === 'ground' || x.category === 'intermediate').map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </Row>
+          <Row label={t('props.ceiling')}>
+            <select value={level.ceilingTypeId ?? ''} onChange={e => updLevel({ ceilingTypeId: e.target.value || null })}>
+              <option value="">{t('props.heatedAbove')}</option>
+              {project.library.slabTypes.filter(x => x.category === 'ceiling-unheated' || x.category === 'roof').map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </Row>
           <div className="side-section">{t('props.project')}</div>
           <Row label={t('props.displayUnit')}>
             <select value={unit} onChange={e => store.update(t('props.displayUnit'), p => ({ ...p, settings: { ...p.settings, displayUnit: e.target.value as any } }))}>

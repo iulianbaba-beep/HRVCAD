@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from 'react'
 import type { Language, Level, Project, Underlay, Vec2, Wall } from './types'
 import { createProject } from './types'
-import { DEFAULT_LIBRARY } from '../library/defaults'
+import { DEFAULT_LIBRARY, PROJECT_DEFAULTS } from '../library/defaults'
 
 export type ViewMode = '2d' | '3d'
 export interface LogLine { text: string; kind: 'info' | 'cmd' | 'warn' | 'error' }
@@ -14,6 +14,22 @@ export interface UIState {
   selectedUnderlayId: string | null
   selectedWallIds: string[]
   selectedOpeningId: string | null
+  selectedRoomId: string | null
+  selectedRoofId: string | null
+  /** Selected HVAC element (unit / plenum / terminal / duct) id. */
+  selectedHvacId: string | null
+  roomType: import('./types').RoomType
+  unitTypeId: string
+  plenumTypeId: string
+  plenumSystem: 'supply' | 'extract'
+  terminalSystem: 'auto' | import('./types').AirSystem
+  ductSystem: import('./types').AirSystem
+  ductMaterialId: string
+  /** Fixed duct size id, or 'auto' to size from the flow. */
+  ductSizeId: string
+  resultsOpen: string | null
+  projectDialog: boolean
+  libraryTab: string
   /** Defaults for the door/window tools. */
   doorDefaults: { width: number; height: number; U: number }
   windowDefaults: { width: number; height: number; sill: number; U: number }
@@ -44,7 +60,7 @@ function loadLanguage(): Language {
   try { return localStorage.getItem('hrvcad.lang') === 'en' ? 'en' : 'ro' } catch { return 'ro' }
 }
 
-const initialProject = createProject('Proiect nou', DEFAULT_LIBRARY)
+const initialProject = createProject('Proiect nou', PROJECT_DEFAULTS)
 let state: AppState = {
   project: initialProject,
   ui: {
@@ -54,6 +70,20 @@ let state: AppState = {
     selectedUnderlayId: null,
     selectedWallIds: [],
     selectedOpeningId: null,
+    selectedRoomId: null,
+    selectedRoofId: null,
+    selectedHvacId: null,
+    roomType: 'other',
+    unitTypeId: DEFAULT_LIBRARY.hvac.units[0].id,
+    plenumTypeId: DEFAULT_LIBRARY.hvac.plenums[0].id,
+    plenumSystem: 'supply',
+    terminalSystem: 'auto',
+    ductSystem: 'supply',
+    ductMaterialId: DEFAULT_LIBRARY.hvac.ductMaterials[0].id,
+    ductSizeId: 'auto',
+    resultsOpen: null,
+    projectDialog: false,
+    libraryTab: 'walls',
     doorDefaults: { width: 0.9, height: 2.1, U: 1.5 },
     windowDefaults: { width: 1.2, height: 1.4, sill: 0.9, U: 1.1 },
     wallTypeId: DEFAULT_LIBRARY.wallTypes[0].id,
@@ -110,7 +140,7 @@ export const store = {
     redoStack.length = 0
     state = {
       project: p,
-      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, selectedWallIds: [], selectedOpeningId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
+      ui: { ...state.ui, activeLevelId: p.levels[0]?.id, selectedUnderlayId: null, selectedWallIds: [], selectedOpeningId: null, selectedRoomId: null, selectedRoofId: null, selectedHvacId: null, activeTool: null, prompt: null, awaitingInput: false, filePath, dirty: false }
     }
     emit()
   },
@@ -175,7 +205,7 @@ export function updateLevel(label: string, levelId: string, fn: (l: Level) => Le
 }
 
 /** Clear every selection (walls, openings, underlays). */
-export const NO_SELECTION = { selectedWallIds: [] as string[], selectedOpeningId: null, selectedUnderlayId: null }
+export const NO_SELECTION = { selectedWallIds: [] as string[], selectedOpeningId: null, selectedUnderlayId: null, selectedRoomId: null, selectedRoofId: null, selectedHvacId: null }
 
 export function selectedWalls(s: AppState = state): { level: Level; wall: Wall }[] {
   const out: { level: Level; wall: Wall }[] = []
@@ -199,6 +229,10 @@ export function findWall(id: string | null, s: AppState = state) {
     if (wall) return { level, wall }
   }
   return null
+}
+
+export function updateHvac(label: string, fn: (h: import('./types').HvacModel) => import('./types').HvacModel) {
+  store.update(label, p => ({ ...p, hvac: fn(p.hvac) }))
 }
 
 // ---- Simple event bus for viewport actions --------------------------------

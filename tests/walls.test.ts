@@ -8,7 +8,7 @@ const close = (a: number, b: number, eps = 1e-9) => assert.ok(Math.abs(a - b) < 
 
 const lib: Library = {
   materials: [{ id: 'm', name: 'M', lambda: 0.3, source: 'test', verified: true }],
-  wallTypes: [{ id: 't', name: 'T', category: 'exterior', layers: [{ materialId: 'm', thickness: 0.3 }] }]
+  wallTypes: [{ id: 't', name: 'T', category: 'exterior', layers: [{ materialId: 'm', thickness: 0.3 }] }], slabTypes: [], hvac: { units: [], ductMaterials: [], terminals: [], plenums: [] }
 }
 
 test('face offsets follow the location line', () => {

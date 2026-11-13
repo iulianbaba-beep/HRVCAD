@@ -4,6 +4,8 @@ import { ProjectPanel, PropertiesPanel } from './Panels'
 import { CommandLine, focusCommandLine } from './CommandLine'
 import { StatusBar } from './StatusBar'
 import { LibraryDialog } from './LibraryDialog'
+import { ResultsDialog } from './ResultsDialog'
+import { ProjectDialog } from './ProjectDialog'
 import { Viewport } from '../viewport/engine'
 import { store, useStore } from '../core/store'
 import { lastCommand, runCommand } from '../core/commands'
@@ -67,6 +69,8 @@ export function App() {
   const showLeft = useStore(s => s.ui.showProjectPanel)
   const showRight = useStore(s => s.ui.showPropertiesPanel)
   const libraryOpen = useStore(s => s.ui.libraryOpen)
+  const resultsOpen = useStore(s => s.ui.resultsOpen)
+  const projectDialog = useStore(s => s.ui.projectDialog)
   useStore(s => s.ui.language)
   useEffect(() => { store.log(t('welcome', { v: APP_VERSION })) }, [])
   return (
@@ -80,6 +84,8 @@ export function App() {
       <CommandLine />
       <StatusBar />
       {libraryOpen && <LibraryDialog />}
+      {resultsOpen && <ResultsDialog />}
+      {projectDialog && <ProjectDialog />}
     </div>
   )
 }

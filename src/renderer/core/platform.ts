@@ -7,6 +7,7 @@ interface Bridge {
   platform: string
   openFile(filters: FileFilter[]): Promise<OpenedFile | null>
   saveFile(name: string, filters: FileFilter[], data: Uint8Array, path?: string): Promise<SavedFile | null>
+  printPdf(html: string, suggestedName: string, landscape: boolean): Promise<SavedFile | null>
 }
 
 const bridge: Bridge | undefined = (globalThis as any).hrvcad
@@ -38,5 +39,15 @@ export async function saveFile(suggestedName: string, filters: FileFilter[], dat
   a.download = suggestedName
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 2000)
+  return { name: suggestedName }
+}
+
+/** Print an HTML document to PDF (Electron: native save dialog; browser: print dialog of a new window). */
+export async function printHtmlToPdf(html: string, suggestedName: string, landscape = false): Promise<SavedFile | null> {
+  if (bridge) return bridge.printPdf(html, suggestedName, landscape)
+  const w = window.open('', '_blank')
+  if (!w) return null
+  w.document.open(); w.document.write(html); w.document.close()
+  setTimeout(() => w.print(), 300)
   return { name: suggestedName }
 }
