@@ -108,6 +108,8 @@ export const DEFAULT_LIBRARY: Library = {
 const R = (r: Partial<RoomRule> & { tempInt: number }, verified = false): RoomRule => ({ ...r, verified })
 const DIN: Record<RoomType, RoomRule> = {
   living: R({ supplyFactor: 3, tempInt: 20, noiseLimit: 35 }, true),
+  // open-plan living + kitchen: living-room supply factor and kitchen extract in the same space
+  livingKitchen: R({ supplyFactor: 3, extract: 45, tempInt: 20, noiseLimit: 35 }),
   bedroom: R({ supplyFactor: 2, tempInt: 20, noiseLimit: 30 }, true),
   kids: R({ supplyFactor: 2, tempInt: 20, noiseLimit: 30 }, true),
   study: R({ supplyFactor: 1.5, tempInt: 20, noiseLimit: 35 }, true),
@@ -139,14 +141,14 @@ export const DEFAULT_NORMS: NormProfile[] = [
     source: 'DIN 1946-6 (formula q = f·(−0,002·A² + 1,15·A + 11), factori f_R,zu) — preluat din IKZ 10/2022; debitele de extracție pentru bucătărie/baie/WC sunt de verificat cu tabelul 16 din standard' },
   { id: 'I5-2022', name: 'I5-2022 — valori de pornire (de completat)', method: 'perRoom', levelFactor: 1,
     rooms: perRoom({
-      living: { supplyFixed: 60 }, bedroom: { supplyPerPerson: 30 }, kids: { supplyPerPerson: 30 }, study: { supplyFixed: 30 },
+      living: { supplyFixed: 60 }, livingKitchen: { supplyFixed: 60, extract: 60 }, bedroom: { supplyPerPerson: 30 }, kids: { supplyPerPerson: 30 }, study: { supplyFixed: 30 },
       dining: { supplyFixed: 30 }, guest: { supplyPerPerson: 30 },
       kitchen: { extract: 60 }, kitchenette: { extract: 45 }, bath: { extract: 50 }, wc: { extract: 25 }, utility: { extract: 30 }, storage: { extract: 20 }, sauna: { extract: 40 }
     }),
     source: 'Valorile pe încăperi din I5-2022 (cap. 6.1 / anexe) nu au putut fi verificate automat — introduceți valorile din normativ' },
   { id: 'SR EN 16798-1', name: 'SR EN 16798-1 cat. II — valori de pornire (de completat)', method: 'perRoom', levelFactor: 1,
     rooms: perRoom({
-      living: { supplyPerM2: 1.5 }, bedroom: { supplyPerM2: 1.5 }, kids: { supplyPerM2: 1.5 }, study: { supplyPerM2: 1.5 },
+      living: { supplyPerM2: 1.5 }, livingKitchen: { supplyPerM2: 1.5, extract: 72 }, bedroom: { supplyPerM2: 1.5 }, kids: { supplyPerM2: 1.5 }, study: { supplyPerM2: 1.5 },
       dining: { supplyPerM2: 1.5 }, guest: { supplyPerM2: 1.5 },
       kitchen: { extract: 72 }, kitchenette: { extract: 72 }, bath: { extract: 54 }, wc: { extract: 36 }, utility: { extract: 36 }, storage: { extract: 20 }, sauna: { extract: 54 }
     }),

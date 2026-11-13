@@ -30,6 +30,10 @@ export function migrate(p: any): Project {
   p.library.hvac ??= structuredClone(DEFAULT_LIBRARY.hvac)
   p.site ??= structuredClone(DEFAULT_SITE)
   p.norms ??= structuredClone(DEFAULT_NORMS)
+  for (const n of p.norms) {
+    const ref = DEFAULT_NORMS.find(d => d.id === n.id) ?? DEFAULT_NORMS[0]
+    for (const k of Object.keys(ref.rooms)) n.rooms[k] ??= structuredClone((ref.rooms as any)[k])
+  }
   p.hvac ??= { units: [], plenums: [], terminals: [], ducts: [] }
   p.settings.ductBelowCeiling ??= 0.25
   for (const l of p.levels ?? []) { l.underlays ??= []; l.walls ??= []; l.rooms ??= []; l.slab ??= null; l.roofs ??= []; if (l.ceilingTypeId === undefined) l.ceilingTypeId = 'st_attic_vata25' }

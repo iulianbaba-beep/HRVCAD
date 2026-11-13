@@ -1,7 +1,7 @@
 import { TbX, TbAlertTriangle, TbCircleCheck } from 'react-icons/tb'
 import { store, useStore } from '../core/store'
 import { analyse } from '../calc'
-import { useT } from '../i18n'
+import { t as tg, useT } from '../i18n'
 import { runCommand } from '../core/commands'
 
 const f0 = (v: number) => (Number.isFinite(v) ? Math.round(v).toLocaleString('ro-RO') : '—')
@@ -14,7 +14,7 @@ export function ResultsDialog() {
   const p = useStore(s => s.project)
   const a = analyse(p)
   const close = () => store.setUI({ resultsOpen: null })
-  const tabs: [string, string][] = [['air', t('res.tab.air')], ['heat', t('res.tab.heat')], ['net', t('res.tab.net')], ['energy', t('res.tab.energy')], ['issues', t('res.tab.issues', { n: a.net.issues.length })]]
+  const tabs: [string, string][] = [['air', t('res.tab.air')], ['heat', t('res.tab.heat')], ['net', t('res.tab.net')], ['energy', t('res.tab.energy')], ['issues', t('res.tab.issues', { n: a.net.issues.length + a.checks.filter(c => c.severity !== 'info').length })]]
   const roomName = (id: string | null) => p.levels.flatMap(l => l.rooms).find(r => r.id === id)?.name ?? '—'
   return (
     <div className="modal-backdrop" onMouseDown={close}>
@@ -122,13 +122,37 @@ export function ResultsDialog() {
             <p className="muted small">{t('res.energyNote')}</p>
           </>}
           {tab === 'issues' && <>
-            {a.net.issues.length === 0 ? <p className="ok-box"><TbCircleCheck /> {t('res.noIssues')}</p> :
-              <ul className="issues">{a.net.issues.map((i, k) => <li key={k}><TbAlertTriangle className="warn-ic" /> {t(`issue.${i.kind}` as any, { d: i.detail ? t(`system.${i.detail}` as any) : '' })}</li>)}</ul>}
+            {a.net.issues.length + a.checks.length === 0 ? <p className="ok-box"><TbCircleCheck /> {t('res.noIssues')}</p> :
+              <ul className="issues">
+                {a.checks.map((c, k) => <li key={`c${k}`} className={c.severity}><TbAlertTriangle className="warn-ic" /> {checkText(c)}
+                  {c.id && <button className="link" onClick={() => selectFor(c.id!)}>{t('res.show')}</button>}</li>)}
+                {a.net.issues.map((i, k) => <li key={k}><TbAlertTriangle className="warn-ic" /> {t(`issue.${i.kind}` as any, { d: i.detail ? t(`system.${i.detail}` as any) : '' })}
+                  {i.id && <button className="link" onClick={() => selectFor(i.id!)}>{t('res.show')}</button>}</li>)}
+              </ul>}
           </>}
         </div>
       </div>
     </div>
   )
+}
+
+/** Human text for a model check. */
+export function checkText(c: { kind: string; detail?: string }): string {
+  const sys = (s?: string) => (s && ['supply', 'extract', 'outdoor', 'exhaust'].includes(s) ? tg(`system.${s}` as any) : s ?? '')
+  const [a, b] = (c.detail ?? '').split('|')
+  return tg(`check.${c.kind}` as any, { d: sys(a), e: b ?? '' })
+}
+
+/** Select the element an issue refers to and close the dialog. */
+function selectFor(id: string) {
+  const p = store.get().project
+  const base = { resultsOpen: null, selectedWallIds: [] as string[], selectedHvacId: null, selectedRoomId: null, selectedOpeningId: null, selectedRoofId: null, selectedUnderlayId: null }
+  const lvl = p.levels.find(l => l.walls.some(w => w.id === id) || l.rooms.some(r => r.id === id))
+  if (lvl?.walls.some(w => w.id === id)) return store.setUI({ ...base, activeLevelId: lvl.id, selectedWallIds: [id] })
+  if (lvl?.rooms.some(r => r.id === id)) return store.setUI({ ...base, activeLevelId: lvl.id, selectedRoomId: id })
+  const h = p.hvac
+  const el = [...h.ducts, ...h.terminals, ...h.plenums, ...h.units].find(x => x.id === id)
+  if (el) store.setUI({ ...base, activeLevelId: el.levelId, selectedHvacId: id })
 }
 
 function Kpi({ label, value, bad, small }: { label: string; value: string; bad?: boolean; small?: boolean }) {

@@ -33,7 +33,7 @@ export const ribbon: RibbonTab[] = [
     id: 'hvac', title: 'tab.hvac',
     panels: [
       { title: 'panel.equipment', buttons: [L('hvac.unit'), L('hvac.plenum')] },
-      { title: 'panel.distribution', buttons: [L('hvac.terminal'), L('hvac.duct'), L('calc.autosize')] },
+      { title: 'panel.distribution', buttons: [L('hvac.terminal'), L('hvac.duct'), L('calc.autosize'), S('hvac.fix'), S('tool.measure')] },
       { title: 'panel.catalog', buttons: [L('catalog.editor')] }
     ]
   },

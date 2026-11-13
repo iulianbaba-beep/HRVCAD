@@ -69,6 +69,7 @@ const KEYWORDS: [RegExp, RoomType][] = [
 ]
 
 export function guessRoomType(text: string): RoomType | null {
+  if (/\b(living|camera de zi|zi)\b/i.test(text) && /\b(bucatarie|bucătărie|kitchen)\b/i.test(text)) return 'livingKitchen'
   for (const [re, t] of KEYWORDS) if (re.test(text)) return t
   return null
 }
@@ -94,13 +95,20 @@ export function underlayTextIn(level: Level, polygon: Vec2[]): string {
     }
   }
   items.sort((a, b) => b.p.y - a.p.y || a.p.x - b.p.x)
-  return items.map(i => i.text).join(' ').replace(/\s+/g, ' ').trim()
+  // Plans often repeat labels (mirrored units, "LIVING" / "ROOM" split over two texts): keep each word once.
+  const seen = new Set<string>()
+  const words: string[] = []
+  for (const w of items.map(i => i.text).join(' ').split(/\s+/)) {
+    const k = w.toLowerCase()
+    if (w && !seen.has(k)) { seen.add(k); words.push(w) }
+  }
+  return words.join(' ')
 }
 
 export function makeRoom(seed: Vec2, polygon: Vec2[], area: number, name: string, type: RoomType): Room {
   return { id: newId('room'), name, type, seed, polygon, area, tempInt: null, persons: null, supplyOverride: null, extractOverride: null }
 }
 
-export const SUPPLY_ROOMS: RoomType[] = ['living', 'bedroom', 'kids', 'study', 'dining', 'guest']
+export const SUPPLY_ROOMS: RoomType[] = ['living', 'livingKitchen', 'bedroom', 'kids', 'study', 'dining', 'guest']
 export const EXTRACT_ROOMS: RoomType[] = ['kitchen', 'kitchenette', 'bath', 'wc', 'utility', 'sauna', 'storage']
-export const ROOM_TYPES: RoomType[] = ['living', 'bedroom', 'kids', 'study', 'dining', 'guest', 'kitchen', 'kitchenette', 'bath', 'wc', 'utility', 'sauna', 'hall', 'storage', 'technical', 'other']
+export const ROOM_TYPES: RoomType[] = ['living', 'livingKitchen', 'bedroom', 'kids', 'study', 'dining', 'guest', 'kitchen', 'kitchenette', 'bath', 'wc', 'utility', 'sauna', 'hall', 'storage', 'technical', 'other']

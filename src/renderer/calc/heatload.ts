@@ -8,6 +8,7 @@ import { closestOnSegment, faceOffsets, wallPolygons, wallThickness } from '../c
 import { wallTypeU, layersResistance, RS } from '../core/thermal'
 import { LOCALITIES } from '../library/defaults'
 import type { AirflowResult } from './airflow'
+import { facadeWalls } from './checks'
 
 export interface HeatLoadElement { kind: 'wall' | 'window' | 'door' | 'interior' | 'floor' | 'ceiling'; area: number; U: number; dT: number; phi: number; label: string }
 export interface RoomHeat {
@@ -60,6 +61,7 @@ export function computeHeatLoad(p: Project, air: AirflowResult): HeatLoadResult 
       return null
     }
     const above = sortedLevels.find(l => l.elevation > level.elevation + 0.01)
+    const facade = facadeWalls(p, level.id)
     for (const room of level.rooms) {
       const g = geo.get(room.id)
       if (!g) continue
@@ -105,7 +107,7 @@ export function computeHeatLoad(p: Project, air: AirflowResult): HeatLoadResult 
           usedOpenings.add(o.id)
           const A = o.width * o.height
           openArea += A
-          const dT = other ? ti - roomTemp(other) : (wt.category === 'exterior' ? dTe : 0)
+          const dT = other ? ti - roomTemp(other) : (wt.category === 'exterior' || facade.has(wall.id) ? dTe : 0)
           if (dT <= 0) continue
           elements.push({ kind: o.kind, area: A, U: o.U, dT, phi: A * o.U * dT, label: o.kind })
         }
@@ -116,7 +118,7 @@ export function computeHeatLoad(p: Project, air: AirflowResult): HeatLoadResult 
             const U = wallTypeU(wt, lib).U
             elements.push({ kind: 'interior', area: A, U, dT, phi: A * U * dT, label: `${wt.name} → ${other.name}` })
           }
-        } else if (wt.category === 'exterior') {
+        } else if (wt.category === 'exterior' || facade.has(wall.id)) {
           const U = wallTypeU(wt, lib).U + p.site.thermalBridge
           elements.push({ kind: 'wall', area: A, U, dT: dTe, phi: A * U * dTe, label: wt.name })
         }

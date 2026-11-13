@@ -79,7 +79,7 @@ export interface Level {
 // ---- Spaces, slabs, roofs ----------------------------------------------------
 
 export type RoomType =
-  | 'living' | 'bedroom' | 'kids' | 'study' | 'dining' | 'guest'
+  | 'living' | 'livingKitchen' | 'bedroom' | 'kids' | 'study' | 'dining' | 'guest'
   | 'kitchen' | 'kitchenette' | 'bath' | 'wc' | 'utility' | 'sauna'
   | 'hall' | 'storage' | 'technical' | 'other'
 

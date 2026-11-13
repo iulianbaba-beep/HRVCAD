@@ -48,6 +48,14 @@ function useShortcuts() {
   }, [])
 }
 
+function Legend() {
+  const has = useStore(s => s.project.hvac.ducts.length + s.project.hvac.units.length > 0)
+  useStore(s => s.ui.language)
+  if (!has) return null
+  const items: [string, string][] = [['#16a34a', 'outdoor'], ['#1e88e5', 'supply'], ['#e08e0b', 'extract'], ['#8d6e63', 'exhaust']]
+  return <div className="legend">{items.map(([c, k]) => <span key={k}><i style={{ background: c }} />{t(`port.${k}` as any)}</span>)}</div>
+}
+
 function ViewportView() {
   const host = useRef<HTMLDivElement>(null)
   const svg = useRef<SVGSVGElement>(null)
@@ -60,6 +68,7 @@ function ViewportView() {
   return (
     <div className={`viewport${tool ? ' tool-active' : ''}`} ref={host}>
       <svg className="overlay" ref={svg} />
+      <Legend />
     </div>
   )
 }

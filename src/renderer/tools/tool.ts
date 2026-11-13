@@ -23,12 +23,24 @@ export interface Tool {
 }
 
 let active: Tool | null = null
+/** Tools suspended by a transparent command (e.g. measuring during placement). */
+const suspended: Tool[] = []
 
 export const tools = {
   get active() { return active },
 
   start(tool: Tool) {
+    suspended.length = 0
     if (active) tools.cancel(false)
+    active = tool
+    store.setUI({ activeTool: tool.id })
+    tool.start()
+    emitBus('overlay')
+  },
+
+  /** Start a tool on top of the active one; the active one resumes when this one ends. */
+  startTransparent(tool: Tool) {
+    if (active) suspended.push(active)
     active = tool
     store.setUI({ activeTool: tool.id })
     tool.start()
@@ -38,7 +50,16 @@ export const tools = {
   finish() {
     active = null
     store.setUI({ activeTool: null, prompt: null, awaitingInput: false })
+    tools.resume()
     emitBus('overlay')
+  },
+
+  resume() {
+    const prev = suspended.pop()
+    if (!prev) return
+    active = prev
+    store.setUI({ activeTool: prev.id })
+    prev.start()
   },
 
   cancel(logIt = true) {
@@ -47,6 +68,7 @@ export const tools = {
     active = null
     store.setUI({ activeTool: null, prompt: null, awaitingInput: false })
     if (logIt) store.log(t('cmdline.cancelled'), 'cmd')
+    tools.resume()
     emitBus('overlay')
   },
 

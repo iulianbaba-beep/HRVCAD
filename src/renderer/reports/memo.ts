@@ -2,6 +2,7 @@
 import { store } from '../core/store'
 import { analyse } from '../calc'
 import { planSvg } from './planSvg'
+import { checkText } from '../ui/ResultsDialog'
 import { printHtmlToPdf } from '../core/platform'
 import { t, APP_VERSION } from '../i18n'
 import type { Project } from '../core/types'
@@ -109,7 +110,7 @@ export function memoHtml(p: Project): string {
   <p class="note">${esc(t('res.energyNote'))}</p>
 
   <h2>5. ${esc(t('rep.checks'))}</h2>
-  ${issues.length ? `<ul>${issues.map(i => `<li>${esc(t(`issue.${i.kind}` as any, { d: i.detail ? t(`system.${i.detail}` as any) : '' }))}</li>`).join('')}</ul>` : `<div class="ok">${esc(t('res.noIssues'))}</div>`}
+  ${issues.length + a.checks.length ? `<ul>${a.checks.map(c => `<li>${esc(checkText(c))}</li>`).join('')}${issues.map(i => `<li>${esc(t(`issue.${i.kind}` as any, { d: i.detail ? t(`system.${i.detail}` as any) : '' }))}</li>`).join('')}</ul>` : `<div class="ok">${esc(t('res.noIssues'))}</div>`}
   ${unv.length ? `<h3>${esc(t('rep.unverified'))}</h3><div class="warn"><ul>${unv.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
   <p class="footer">${esc(t('rep.disclaimer'))}</p>
   ${levelsSvg}

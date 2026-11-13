@@ -6,6 +6,8 @@ import { roomGeometry, ROOM_TYPES } from '../core/rooms'
 import { roofGeometry } from '../core/roof'
 import { updateHvac } from '../core/store'
 import { analyse } from '../calc'
+import { moveHvacElement, unitPortZ, UNIT_BOX } from '../core/hvacGeom'
+import { moveJoinedEndpoints } from '../core/wallOps'
 import { dist, formatLength } from '../core/geom'
 import { wallTypeThickness, wallTypeU } from '../core/thermal'
 import { runCommand } from '../core/commands'
@@ -230,6 +232,17 @@ export function PropertiesPanel() {
         const a = analyse(project)
         const term = h.terminals.find(x => x.id === selHvacId), duct = h.ducts.find(x => x.id === selHvacId)
         const pl = h.plenums.find(x => x.id === selHvacId), un = h.units.find(x => x.id === selHvacId)
+        const lvlOf = (id: string) => project.levels.find(l => l.id === id)
+        const setPos = (id: string, patch: Record<string, unknown>) => updateHvac(t('props.position'), x => moveHvacElement(x, id, patch as any))
+        const posRows = (el: { id: string; pos: { x: number; y: number }; z: number; levelId: string }, zLabel: string) => {
+          const lv = lvlOf(el.levelId)
+          const z0 = lv?.elevation ?? 0
+          return <>
+            <Row label="X (m)"><NumberField value={el.pos.x} onCommit={v => setPos(el.id, { pos: { ...el.pos, x: v } })} /></Row>
+            <Row label="Y (m)"><NumberField value={el.pos.y} onCommit={v => setPos(el.id, { pos: { ...el.pos, y: v } })} /></Row>
+            <Row label={zLabel}><NumberField value={el.z - z0} onCommit={v => setPos(el.id, { z: z0 + v })} /></Row>
+          </>
+        }
         const sysSel = (v: AirSystem, on: (s: AirSystem) => void) => (
           <select value={v} onChange={e => on(e.target.value as AirSystem)}>{(['supply', 'extract', 'outdoor', 'exhaust'] as const).map(s => <option key={s} value={s}>{t(`system.${s}` as any)}</option>)}</select>)
         return (
@@ -238,7 +251,13 @@ export function PropertiesPanel() {
               <div className="side-section">{t('cmd.hvac.unit')}</div>
               <Row label={t('res.type')}><select value={un.typeId} onChange={e => updateHvac(t('cmd.hvac.unit'), x => ({ ...x, units: x.units.map(u => (u.id === un.id ? { ...u, typeId: e.target.value } : u)) }))}>
                 {lib.hvac.units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
-              <Row label={t('props.rotation')}><NumberField value={(un.rotation * 180) / Math.PI} digits={1} onCommit={v => updateHvac(t('props.rotation'), x => ({ ...x, units: x.units.map(u => (u.id === un.id ? { ...u, rotation: (v * Math.PI) / 180 } : u)) }))} /></Row>
+              {posRows(un, t('props.unitZ'))}
+              <Row label={t('props.rotation')}><NumberField value={(un.rotation * 180) / Math.PI} digits={1} onCommit={v => setPos(un.id, { rotation: (v * Math.PI) / 180 })} /></Row>
+              <Row label={t('props.portZ')}><span className="ro">{(unitPortZ(un) - (lvlOf(un.levelId)?.elevation ?? 0)).toFixed(2)} m · {UNIT_BOX.w}×{UNIT_BOX.d}×{UNIT_BOX.h} m</span></Row>
+              <div className="port-legend">
+                <span><i style={{ background: '#16a34a' }} />{t('port.outdoor')}</span><span><i style={{ background: '#8d6e63' }} />{t('port.exhaust')}</span>
+                <span><i style={{ background: '#1e88e5' }} />{t('port.supply')}</span><span><i style={{ background: '#e08e0b' }} />{t('port.extract')}</span>
+              </div>
               <Row label={t('res.supplySide')}><span className="ro">{Math.round(a.net.requiredSupplySide)} / {a.net.availableSupplySide == null ? '—' : Math.round(a.net.availableSupplySide)} Pa</span></Row>
               <Row label={t('res.extractSide')}><span className="ro">{Math.round(a.net.requiredExtractSide)} / {a.net.availableExtractSide == null ? '—' : Math.round(a.net.availableExtractSide)} Pa</span></Row>
               <p className="muted pad small">{t('props.unitHelp')}</p>
@@ -247,7 +266,11 @@ export function PropertiesPanel() {
               <div className="side-section">{t('cmd.hvac.plenum')}</div>
               <Row label={t('res.type')}><select value={pl.typeId} onChange={e => updateHvac(t('cmd.hvac.plenum'), x => ({ ...x, plenums: x.plenums.map(u => (u.id === pl.id ? { ...u, typeId: e.target.value } : u)) }))}>
                 {lib.hvac.plenums.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
-              <Row label={t('res.system')}>{sysSel(pl.system, s => (s === 'supply' || s === 'extract') && updateHvac(t('res.system'), x => ({ ...x, plenums: x.plenums.map(u => (u.id === pl.id ? { ...u, system: s } : u)) })))}</Row>
+              <Row label={t('res.system')}><div className="seg small">
+                {(['supply', 'extract'] as const).map(s0 => <button key={s0} className={pl.system === s0 ? 'on' : ''}
+                  onClick={() => updateHvac(t('res.system'), x => ({ ...x, plenums: x.plenums.map(u => (u.id === pl.id ? { ...u, system: s0 } : u)), ducts: x.ducts.map(d => (d.pts.some(q => Math.hypot(q.x - pl.pos.x, q.y - pl.pos.y) < 0.35) ? { ...d, system: s0 } : d)) }))}>{t(`system.${s0}` as any)}</button>)}
+              </div></Row>
+              {posRows(pl, t('props.mountZ'))}
             </>}
             {term && (() => {
               const tr = a.net.terminals.find(x => x.terminalId === term.id)
@@ -256,6 +279,8 @@ export function PropertiesPanel() {
                 <Row label={t('res.type')}><select value={term.typeId} onChange={e => updateHvac(t('cmd.hvac.terminal'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, typeId: e.target.value } : u)) }))}>
                   {lib.hvac.terminals.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Row>
                 <Row label={t('res.system')}>{sysSel(term.system, s => updateHvac(t('res.system'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, system: s } : u)) })))}</Row>
+                {posRows(term, t('props.mountZ'))}
+                {tr && !tr.connected && <p className="warn-box small">{t('props.termNotConnected')}</p>}
                 <Row label={t('props.flowQ')}><input placeholder={tr ? Math.round(tr.q).toString() : ''} defaultValue={term.flowOverride ?? ''} key={term.id + term.flowOverride}
                   onBlur={e => { const n = parseFloat(e.target.value.replace(',', '.')); updateHvac(t('props.flowQ'), x => ({ ...x, terminals: x.terminals.map(u => (u.id === term.id ? { ...u, flowOverride: Number.isFinite(n) ? n : null } : u)) })) }} /></Row>
                 {tr && <Row label={t('res.throttle')}><span className="ro">{tr.connected ? `${tr.throttle.toFixed(1)} Pa` : t('res.notConnected')}</span></Row>}
@@ -275,6 +300,12 @@ export function PropertiesPanel() {
                   {mat?.sizes.map(z => <option key={z.id} value={z.id}>{z.label}</option>)}</select></Row>
                 <Row label={t('props.locked')}><input type="checkbox" checked={duct.locked} onChange={e => updD({ locked: e.target.checked })} /></Row>
                 <Row label={t('props.length')}><span className="ro">{L.toFixed(2)} m</span></Row>
+                <Row label={t('props.ductZ')}><NumberField value={Math.max(...duct.pts.map(q => q.z)) - (lvlOf(duct.levelId)?.elevation ?? 0)} onCommit={v => {
+                  // shift the horizontal run; risers keep their connector end
+                  const z0 = lvlOf(duct.levelId)?.elevation ?? 0
+                  const top = Math.max(...duct.pts.map(q => q.z))
+                  updD({ pts: duct.pts.map(q => (Math.abs(q.z - top) < 0.01 ? { ...q, z: z0 + v } : q)) })
+                }} /></Row>
                 {segs.map((sg, i) => <Row key={i} label={`q · v`}><span className={`ro${sg.overVelocity ? ' bad-text' : ''}`}>{Math.round(sg.q)} m³/h · {sg.v.toFixed(2)} m/s · {(sg.dpFriction + sg.dpLocal).toFixed(1)} Pa</span></Row>)}
               </>
             })()}
@@ -386,7 +417,20 @@ export function PropertiesPanel() {
             <Row label={t('props.wallType')}>{typeSelect(w.typeId, id => updW(t('props.wallType'), { typeId: id }))}</Row>
             {typeInfo(w.typeId)}
             <Row label={t('props.justification')}>{justSeg(w.justification, j => updW(t('props.justification'), { justification: j }))}</Row>
-            <Row label={t('props.length')}><span className="ro">{formatLength(dist(w.a, w.b), unit)}</span></Row>
+            <Row label={t('props.lengthM')}><NumberField value={dist(w.a, w.b)} onCommit={v => {
+              if (!(v > 0.05)) return
+              const L = dist(w.a, w.b) || 1
+              const nb = { x: w.a.x + ((w.b.x - w.a.x) / L) * v, y: w.a.y + ((w.b.y - w.a.y) / L) * v }
+              updateLevel(t('props.lengthM'), fw.level.id, l => ({ ...l, walls: moveJoinedEndpoints(l.walls, w.b, nb) }))
+            }} /></Row>
+            {(['a', 'b'] as const).map(end => (
+              <Row key={end} label={`${end.toUpperCase()} — X / Y (m)`}>
+                <div className="xy">
+                  <NumberField value={w[end].x} onCommit={v => updateLevel(t('props.position'), fw.level.id, l => ({ ...l, walls: moveJoinedEndpoints(l.walls, w[end], { x: v, y: w[end].y }) }))} />
+                  <NumberField value={w[end].y} onCommit={v => updateLevel(t('props.position'), fw.level.id, l => ({ ...l, walls: moveJoinedEndpoints(l.walls, w[end], { x: w[end].x, y: v }) }))} />
+                </div>
+              </Row>
+            ))}
             <Row label={t('props.wallHeight')}>
               <NumberField value={w.height ?? fw.level.height} onCommit={v => v > 0 && updW(t('props.wallHeight'), { height: Math.abs(v - fw.level.height) < 1e-6 ? null : v })} />
             </Row>

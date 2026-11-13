@@ -20,7 +20,7 @@ import { tools } from '../tools/tool'
 import { calibrateTool, measureTool, moveTool, rotateTool } from '../tools/underlayTools'
 import { wallTool } from '../tools/wallTool'
 import { autoRoof, autoSlab, detectRooms, roofTool, roomTool } from '../tools/buildTools'
-import { applyAutoSize, deleteHvac, ductTool, plenumTool, terminalTool, unitTool } from '../tools/hvacTools'
+import { applyAutoSize, deleteHvac, ductTool, fixRisers, plenumTool, terminalTool, unitTool } from '../tools/hvacTools'
 import {
   extendTool, flipSelected, mirrorWallsTool, moveWallsTool, offsetTool, openingTool, rotateWallsTool, selectAllWalls, splitTool, trimTool
 } from '../tools/modifyTools'
@@ -231,7 +231,7 @@ const commands: Command[] = [
       store.setUI({ selectedUnderlayId: null })
       store.log(t('underlay.deleted', { name: f.underlay.name }))
     } },
-  { id: 'tool.measure', icon: TbRulerMeasure, aliases: ['DI', 'DIST', 'DISTANTA', 'MEASURE'], run: () => tools.start(measureTool()) },
+  { id: 'tool.measure', icon: TbRulerMeasure, aliases: ['DI', 'DIST', 'DISTANTA', 'MEASURE'], run: () => (tools.active && tools.active.id !== 'tool.measure' ? tools.startTransparent(measureTool()) : tools.start(measureTool())) },
 
   // Building
   { id: 'level.add', icon: TbStack2, aliases: ['LEVEL', 'NIVEL'],
@@ -260,6 +260,7 @@ const commands: Command[] = [
   { id: 'hvac.terminal', icon: TbCircleDot, aliases: ['VALVE', 'GURA'], run: () => tools.start(terminalTool()) },
   { id: 'hvac.duct', icon: TbRouteSquare, aliases: ['DUCT', 'TUB'], run: () => tools.start(ductTool()) },
   { id: 'hvac.fitting', icon: TbVector, aliases: ['FITTING', 'FITING'], stage: 6 },
+  { id: 'hvac.fix', icon: TbArrowsJoin, aliases: ['FIX', 'REPARA'], run: fixRisers },
   { id: 'catalog.editor', icon: TbBook, aliases: ['CATALOG'], run: () => store.setUI({ libraryOpen: true, libraryTab: 'hvac' }) },
 
   // Calculations

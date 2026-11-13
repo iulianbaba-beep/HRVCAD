@@ -13,6 +13,7 @@ import { roomGeometry } from '../core/rooms'
 import { roofGeometry } from '../core/roof'
 import { analyse } from '../calc'
 import { unitPorts, hydraulicDiameter } from '../calc/network'
+import { freeEnds, unitPortZ } from '../core/hvacGeom'
 import { t } from '../i18n'
 import type { AirSystem, Project } from '../core/types'
 
@@ -476,7 +477,7 @@ export class Viewport {
       const ports = unitPorts(u)
       for (const sys of ['supply', 'extract', 'outdoor', 'exhaust'] as AirSystem[]) {
         const q = ports[sys]
-        box(q.x, q.y, u.z + 0.3, 0.12, 0.12, 0.12, SYS_COLOR[sys])
+        box(q.x, q.y, unitPortZ(u) - 0.03, 0.12, 0.12, 0.1, SYS_COLOR[sys])
         if (u.levelId === active.id) pts.push(q.x, q.y)
       }
     }
@@ -944,6 +945,17 @@ export class Viewport {
       parts.push(`<rect class="${cls}" x="${Math.min(b.x0, b.x1)}" y="${Math.min(b.y0, b.y1)}" width="${Math.abs(b.x1 - b.x0)}" height="${Math.abs(b.y1 - b.y0)}"/>`)
     }
 
+    // Temporary dimensions while placing HVAC elements, or for the selected one
+    if (!this.is3D()) {
+      const placing = ['hvac.unit', 'hvac.plenum', 'hvac.terminal', 'tool.measure'].includes(tools.active?.id ?? '')
+      if (placing && this.hover) this.tempDims(this.hover.world, parts)
+      else if (!tools.active && s.ui.selectedHvacId) {
+        const h = s.project.hvac
+        const el = [...h.units, ...h.plenums, ...h.terminals].find(x => x.id === s.ui.selectedHvacId)
+        if (el && el.levelId === activeLevel(s).id) this.tempDims(el.pos, parts)
+      }
+    }
+
     // Tool rubber-band shapes
     for (const sh of tools.active?.overlay() ?? []) parts.push(this.shapeSvg(sh))
 
@@ -989,6 +1001,7 @@ export class Viewport {
       const flows = rf ? [rf.supply > 0.5 ? `↓${fmt0(rf.supply)}` : '', rf.extract > 0.5 ? `↑${fmt0(rf.extract)}` : ''].filter(Boolean).join(' ') : ''
       parts.push(`<g class="room-tag${g.ok ? '' : ' bad'}" transform="translate(${c.x},${c.y})"><text y="-4">${esc(r.name)}</text><text class="sub" y="10">${g.area.toFixed(2)} m²${flows ? ' · ' + flows + ' m³/h' : ''}</text></g>`)
     }
+    if (a) this.hvacMarks(s, parts, true)
     if (this.pxPerM < 35 || !a) return
     for (const sgm of a.net.segments) {
       const d = p.hvac.ducts.find(x => x.id === sgm.ductId)
@@ -1007,7 +1020,54 @@ export class Viewport {
       const term = p.hvac.terminals.find(x => x.id === tr.terminalId)
       if (!term || term.levelId !== lvl.id) continue
       const c = this.worldToScreen(term.pos)
+      if (!tr.connected) parts.push(`<circle class="ov-unconn" cx="${c.x}" cy="${c.y}" r="13"/>`)
       parts.push(`<text class="term-tag${tr.connected ? '' : ' bad'}" x="${c.x + 10}" y="${c.y + 4}" fill="${SYS_CSS[term.system]}">${fmt0(tr.q)}</text>`)
+    }
+  }
+
+  /** Port names, plenum system, free duct ends (always visible in plan). */
+  private hvacMarks(s: AppState, parts: string[], basic = false) {
+    if (!basic) return
+    const p = s.project, lvl = activeLevel(s)
+    for (const u of p.hvac.units.filter(x => x.levelId === lvl.id)) {
+      const ports = unitPorts(u)
+      for (const sys of Object.keys(ports) as AirSystem[]) {
+        const c = this.worldToScreen(ports[sys]), o = this.worldToScreen(u.pos)
+        const dx = c.x - o.x, dy = c.y - o.y, L = Math.hypot(dx, dy) || 1
+        const lx = c.x + (dx / L) * 22, ly = c.y + (dy / L) * 14
+        parts.push(`<text class="port-tag" x="${lx}" y="${ly + 3}" text-anchor="${dx >= 0 ? 'start' : 'end'}" fill="${SYS_CSS[sys]}">${t(`port.short.${sys}` as any)}</text>`)
+      }
+    }
+    for (const pl of p.hvac.plenums.filter(x => x.levelId === lvl.id)) {
+      const c = this.worldToScreen(pl.pos)
+      parts.push(`<text class="port-tag" x="${c.x}" y="${c.y - 0.2 * this.pxPerM - 4}" text-anchor="middle" fill="${SYS_CSS[pl.system]}">${t('port.plenum')} · ${t(`port.short.${pl.system}` as any)}</text>`)
+    }
+    for (const d of p.hvac.ducts.filter(x => x.levelId === lvl.id)) {
+      for (const e of freeEnds(p.hvac, d)) { const c = this.worldToScreen(e); parts.push(`<circle class="ov-free" cx="${c.x}" cy="${c.y}" r="5"/>`) }
+    }
+  }
+
+  /** Temporary dimensions (Revit-style): distances from a point to the nearest wall faces in ±X / ±Y. */
+  private tempDims(pt: Vec2, parts: string[]) {
+    const we = this.wallEntries.get(activeLevel().id)
+    if (!we) return
+    const dirs = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }]
+    for (const d of dirs) {
+      let best = 30
+      for (const poly of we.polys.values()) for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length]
+        const ex = b.x - a.x, ey = b.y - a.y
+        const den = d.x * ey - d.y * ex
+        if (Math.abs(den) < 1e-12) continue
+        const tt = ((a.x - pt.x) * ey - (a.y - pt.y) * ex) / den
+        const u = ((a.x - pt.x) * d.y - (a.y - pt.y) * d.x) / den
+        if (tt > 0.005 && u >= 0 && u <= 1 && tt < best) best = tt
+      }
+      if (best >= 30) continue
+      const A = this.worldToScreen(pt), B = this.worldToScreen({ x: pt.x + d.x * best, y: pt.y + d.y * best })
+      const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2
+      parts.push(`<line class="ov-dim" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}"/><path class="ov-dim" d="M${B.x - 4 * d.y} ${B.y - 4 * d.x}L${B.x + 4 * d.y} ${B.y + 4 * d.x}"/>`)
+      parts.push(`<text class="ov-dim-label" x="${mx + (d.y ? 16 : 0)}" y="${my + (d.x ? -5 : 4)}">${best.toFixed(2)}</text>`)
     }
   }
 
